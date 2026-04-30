@@ -4,8 +4,6 @@ Runs AFTER ``targets.run(ctx)`` when the effective target is known.
 Only checks target/compilation-related policy rules -- dependency
 allow/deny/required and MCP checks already ran in the policy_gate
 phase and must NOT be re-emitted here.
-
-Design reference: plan.md section G, rubber-duck finding I6.
 """
 
 from __future__ import annotations

@@ -9,8 +9,6 @@ Covers:
 - Skip when policy_enforcement_active=False (escape-hatched)
 - Skip when no policy fetched
 - Uses fixtures: apm-policy-target-allow.yml + target-mismatch/
-
-Design reference: plan.md section G, rubber-duck finding I6.
 """
 
 from __future__ import annotations

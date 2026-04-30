@@ -4,7 +4,7 @@ Exercises the **full CLI pipeline** via ``CliRunner`` against a real temp
 project tree. Unit tests (W2) already cover individual phases; these tests
 verify the pipeline + escape hatches + rollback work as a **system**.
 
-Coverage matrix (plan.md section F, 17 scenarios):
+Coverage matrix (17 scenarios):
 
   I1  block + denied direct dep -> exit non-zero, deny detail, no lockfile
   I2  block + denied + --no-policy -> succeeds, loud warning
