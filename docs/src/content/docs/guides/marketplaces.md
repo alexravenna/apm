@@ -81,10 +81,24 @@ The `version` field is informational (displayed by `apm view` and `apm outdated`
 ## Register a marketplace
 
 ```bash
-apm marketplace add acme/plugin-marketplace
+apm add acme/plugin-marketplace
 ```
 
 This registers the marketplace and fetches its `marketplace.json`. By default APM tracks the `main` branch.
+
+> The legacy spelling `apm marketplace add acme/plugin-marketplace` keeps
+> working and points users at the new top-level alias.
+
+:::tip[Register multiple sources at once]
+`apm add` accepts multiple positional arguments:
+
+```bash
+apm add github/awesome-copilot microsoft/azure-skills
+```
+
+Non-security failures (404, network) report and continue with a final
+summary; security-class failures (path traversal) abort the batch.
+:::
 
 :::tip[Create your own marketplace]
 You can author and publish your own marketplace registry.
@@ -106,20 +120,21 @@ This ensures parity with Claude Code install instructions -- if a marketplace's 
 [i] Install plugins with: apm install <plugin>@addy-agent-skills
 ```
 
-Use `--name` to override the alias explicitly.
+Use `--name` to override the alias explicitly. `--name` is mutually
+exclusive with multiple positional sources (aliases are per-source).
 
 **Options:**
-- `--name/-n` -- Override the local alias (defaults to the `marketplace.json` `name` field, then repo name)
+- `--name/-n` -- Override the local alias (single-source only; defaults to the `marketplace.json` `name` field, then repo name)
 - `--branch/-b` -- Branch to track (default: `main`)
 - `--host` -- Git host FQDN for non-github.com hosts (default: `github.com` or `GITHUB_HOST` env var)
 
 ```bash
 # Register with a custom name on a specific branch
-apm marketplace add acme/plugin-marketplace --name acme-plugins --branch release
+apm add acme/plugin-marketplace --name acme-plugins --branch release
 
 # Register from a GitHub Enterprise host (two equivalent forms)
-apm marketplace add acme/plugin-marketplace --host ghes.corp.example.com
-apm marketplace add ghes.corp.example.com/acme/plugin-marketplace
+apm add acme/plugin-marketplace --host ghes.corp.example.com
+apm add ghes.corp.example.com/acme/plugin-marketplace
 ```
 
 ## List registered marketplaces
@@ -226,11 +241,13 @@ Marketplace commands (`add`, `browse`, `search`, `update`) honor the `PROXY_REGI
 Remove a registered marketplace:
 
 ```bash
-apm marketplace remove acme-plugins
+apm remove acme-plugins
 
 # Skip confirmation prompt
-apm marketplace remove acme-plugins --yes
+apm remove acme-plugins --yes
 ```
+
+The legacy `apm marketplace remove` spelling continues to work.
 
 Removing a marketplace does not uninstall plugins previously installed from it. Those plugins remain pinned in `apm.lock.yaml` to their resolved Git sources.
 

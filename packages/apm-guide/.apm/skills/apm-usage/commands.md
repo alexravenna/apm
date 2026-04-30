@@ -52,11 +52,11 @@
 
 | Command | Purpose | Key flags |
 |---------|---------|-----------|
-| `apm marketplace add OWNER/REPO` | Register a marketplace | `-n NAME`, `-b BRANCH`, `--host HOST` |
+| `apm add OWNER/REPO [OWNER/REPO ...]` | Register one or more marketplaces (alias: `apm marketplace add`) | `-n NAME` (single only), `-b BRANCH`, `--host HOST` |
 | `apm marketplace list` | List registered marketplaces | -- |
 | `apm marketplace browse NAME` | Browse marketplace plugins | -- |
 | `apm marketplace update [NAME]` | Update marketplace index | -- |
-| `apm marketplace remove NAME` | Remove a marketplace | `-y` skip confirm |
+| `apm remove NAME` | Remove a marketplace (alias: `apm marketplace remove`) | `-y` skip confirm |
 | `apm marketplace validate NAME` | Validate marketplace manifest | `--check-refs`, `-v` |
 | `apm search QUERY@MARKETPLACE` | Search marketplace | `--limit N` |
 | `apm install NAME@MKT[#ref]` | Install from marketplace | Optional `#ref` override |

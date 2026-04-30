@@ -1159,9 +1159,18 @@ apm marketplace COMMAND [OPTIONS]
 
 Register a GitHub repository as a plugin marketplace.
 
+> **Tip:** This command is also available at the top level as `apm add`,
+> which additionally accepts multiple positional sources and a smart
+> typo-detection path. Both spellings call the same code; pick whichever
+> is more familiar (`apm add github/awesome-copilot` vs
+> `apm marketplace add github/awesome-copilot`).
+
 ```bash
 apm marketplace add OWNER/REPO [OPTIONS]
 apm marketplace add HOST/OWNER/REPO [OPTIONS]
+
+# Equivalent top-level alias (single OR multiple sources):
+apm add OWNER/REPO [OWNER/REPO ...]
 ```
 
 **Arguments:**
@@ -1169,22 +1178,39 @@ apm marketplace add HOST/OWNER/REPO [OPTIONS]
 - `HOST/OWNER/REPO` - Repository on a non-github.com host (e.g., GitHub Enterprise)
 
 **Options:**
-- `-n, --name TEXT` - Custom display name for the marketplace
+- `-n, --name TEXT` - Custom display name for the marketplace (single-source only)
 - `-b, --branch TEXT` - Branch to track (default: main)
 - `--host TEXT` - Git host FQDN (default: github.com or `GITHUB_HOST` env var)
 - `-v, --verbose` - Show detailed output
 
+**Multi-source semantics (top-level `apm add` only):**
+When you pass more than one `OWNER/REPO`, registrations run in order.
+Non-security failures (404, network, parse error) are reported and the
+loop continues; a final summary line reports `N registered, M failed`.
+Security-class failures (path traversal, signature mismatch) abort the
+batch immediately and any remaining sources are skipped (fail-closed).
+
 **Examples:**
 ```bash
-# Register a marketplace
-apm marketplace add acme/plugin-marketplace
+# Register a single marketplace
+apm add acme/plugin-marketplace
 
-# Register with a custom name and branch
-apm marketplace add acme/plugin-marketplace --name acme-plugins --branch release
+# Register multiple marketplaces in one shot
+apm add github/awesome-copilot microsoft/azure-skills
+
+# Register with a custom name and branch (single source)
+apm add acme/plugin-marketplace --name acme-plugins --branch release
 
 # Register from a GitHub Enterprise host
-apm marketplace add acme/plugin-marketplace --host ghes.corp.example.com
-apm marketplace add ghes.corp.example.com/acme/plugin-marketplace
+apm add acme/plugin-marketplace --host ghes.corp.example.com
+apm add ghes.corp.example.com/acme/plugin-marketplace
+
+# A bare name without a slash is treated as a typo and rejected
+# with a hint to use `apm install` instead:
+apm add cool-plugin
+# Error: 'cool-plugin' is not in OWNER/REPO format.
+#   - To register a marketplace: apm add OWNER/REPO
+#   - Did you mean to install a plugin? Try: apm install cool-plugin
 ```
 
 #### `apm marketplace list` - List registered marketplaces
@@ -1250,8 +1276,14 @@ apm marketplace update
 
 Unregister a marketplace. Plugins previously installed from it remain pinned in `apm.lock.yaml`.
 
+> **Tip:** This command is also available at the top level as `apm remove`.
+> Both spellings are equivalent.
+
 ```bash
 apm marketplace remove NAME [OPTIONS]
+
+# Equivalent top-level alias:
+apm remove NAME [OPTIONS]
 ```
 
 **Arguments:**
@@ -1264,10 +1296,10 @@ apm marketplace remove NAME [OPTIONS]
 **Examples:**
 ```bash
 # Remove with confirmation prompt
-apm marketplace remove acme-plugins
+apm remove acme-plugins
 
 # Remove without confirmation
-apm marketplace remove acme-plugins --yes
+apm remove acme-plugins --yes
 ```
 
 #### `apm marketplace validate` - Validate a marketplace manifest
