@@ -690,3 +690,190 @@ class TestViewMarketplaceNoField(_InfoCmdBase):
 
         assert result.exit_code == 0
         assert "1.0.0" in result.output
+
+
+# ------------------------------------------------------------------
+# _display_marketplace_plugin error and display variation tests
+# ------------------------------------------------------------------
+
+
+class TestDisplayMarketplacePluginErrors(_InfoCmdBase):
+    """Error handling and display variations for _display_marketplace_plugin."""
+
+    def _invoke_marketplace(self, plugin_name="my-plugin", marketplace="acme-tools"):
+        return self.runner.invoke(cli, ["view", f"{plugin_name}@{marketplace}"])
+
+    def test_marketplace_not_found_exits_1(self):
+        """Exits 1 when get_marketplace_by_name raises an exception."""
+        with patch(
+            "apm_cli.marketplace.registry.get_marketplace_by_name",
+            side_effect=ValueError("unknown marketplace: acme-tools"),
+        ):
+            result = self._invoke_marketplace()
+        assert result.exit_code == 1
+        assert "unknown marketplace" in result.output.lower()
+
+    def test_marketplace_fetch_error_exits_1(self):
+        """Exits 1 when fetch_or_cache raises MarketplaceFetchError."""
+        from apm_cli.marketplace.errors import MarketplaceFetchError
+        from apm_cli.marketplace.models import MarketplaceSource
+
+        source = MarketplaceSource(name="acme-tools", owner="acme", repo="marketplace")
+        with (
+            patch(
+                "apm_cli.marketplace.registry.get_marketplace_by_name",
+                return_value=source,
+            ),
+            patch(
+                "apm_cli.marketplace.client.fetch_or_cache",
+                side_effect=MarketplaceFetchError("network failure"),
+            ),
+        ):
+            result = self._invoke_marketplace()
+        assert result.exit_code == 1
+        assert "network failure" in result.output
+
+    def test_plugin_not_found_exits_1(self):
+        """Exits 1 when the plugin is absent from the marketplace manifest."""
+        from apm_cli.marketplace.models import (
+            MarketplaceManifest,
+            MarketplaceSource,
+        )
+
+        manifest = MarketplaceManifest(name="acme-tools", plugins=())
+        source = MarketplaceSource(name="acme-tools", owner="acme", repo="marketplace")
+        with (
+            patch(
+                "apm_cli.marketplace.registry.get_marketplace_by_name",
+                return_value=source,
+            ),
+            patch(
+                "apm_cli.marketplace.client.fetch_or_cache",
+                return_value=manifest,
+            ),
+        ):
+            result = self._invoke_marketplace(plugin_name="missing-plugin")
+        assert result.exit_code == 1
+        assert "missing-plugin" in result.output
+
+    def test_plugin_with_str_source_displays(self):
+        """Plugin with a plain string source renders the source value."""
+        from apm_cli.marketplace.models import (
+            MarketplaceManifest,
+            MarketplacePlugin,
+            MarketplaceSource,
+        )
+
+        plugin = MarketplacePlugin(
+            name="str-plugin",
+            source="github.com/acme/str-plugin",
+            version="0.1.0",
+        )
+        manifest = MarketplaceManifest(name="acme-tools", plugins=(plugin,))
+        source = MarketplaceSource(name="acme-tools", owner="acme", repo="marketplace")
+
+        with (
+            patch(
+                "apm_cli.marketplace.registry.get_marketplace_by_name",
+                return_value=source,
+            ),
+            patch(
+                "apm_cli.marketplace.client.fetch_or_cache",
+                return_value=manifest,
+            ),
+            _force_rich_fallback(),
+        ):
+            result = self.runner.invoke(cli, ["view", "str-plugin@acme-tools"])
+
+        assert result.exit_code == 0
+        assert "github.com/acme/str-plugin" in result.output
+
+    def test_plugin_with_tags_displays(self):
+        """Plugin tags are shown in the output."""
+        from apm_cli.marketplace.models import (
+            MarketplaceManifest,
+            MarketplacePlugin,
+            MarketplaceSource,
+        )
+
+        plugin = MarketplacePlugin(
+            name="tagged-plugin",
+            source={"type": "github", "repo": "acme/tagged", "ref": "main"},
+            version="1.0.0",
+            tags=["ai", "testing"],
+        )
+        manifest = MarketplaceManifest(name="acme-tools", plugins=(plugin,))
+        source = MarketplaceSource(name="acme-tools", owner="acme", repo="marketplace")
+
+        with (
+            patch(
+                "apm_cli.marketplace.registry.get_marketplace_by_name",
+                return_value=source,
+            ),
+            patch(
+                "apm_cli.marketplace.client.fetch_or_cache",
+                return_value=manifest,
+            ),
+            _force_rich_fallback(),
+        ):
+            result = self.runner.invoke(cli, ["view", "tagged-plugin@acme-tools"])
+
+        assert result.exit_code == 0
+        assert "ai" in result.output
+        assert "testing" in result.output
+
+    def test_plugin_without_version_or_description(self):
+        """Plugin with no version/description renders without those lines."""
+        from apm_cli.marketplace.models import (
+            MarketplaceManifest,
+            MarketplacePlugin,
+            MarketplaceSource,
+        )
+
+        plugin = MarketplacePlugin(
+            name="bare-plugin",
+            source={"type": "github", "repo": "acme/bare"},
+        )
+        manifest = MarketplaceManifest(name="acme-tools", plugins=(plugin,))
+        source = MarketplaceSource(name="acme-tools", owner="acme", repo="marketplace")
+
+        with (
+            patch(
+                "apm_cli.marketplace.registry.get_marketplace_by_name",
+                return_value=source,
+            ),
+            patch(
+                "apm_cli.marketplace.client.fetch_or_cache",
+                return_value=manifest,
+            ),
+            _force_rich_fallback(),
+        ):
+            result = self.runner.invoke(cli, ["view", "bare-plugin@acme-tools"])
+
+        assert result.exit_code == 0
+        assert "bare-plugin" in result.output
+        assert "Install: apm install bare-plugin@acme-tools" in result.output
+
+
+# ------------------------------------------------------------------
+# display_package_info exception handling
+# ------------------------------------------------------------------
+
+
+class TestDisplayPackageInfoErrors(_InfoCmdBase):
+    """Verify display_package_info handles unexpected exceptions gracefully."""
+
+    def test_package_info_read_failure_exits_1(self):
+        """Exits 1 and shows error message when _get_detailed_package_info raises."""
+        with self._chdir_tmp() as tmp:
+            self._make_package(tmp, "eorg", "erepo")
+            import os
+
+            os.chdir(tmp)
+            with patch(
+                "apm_cli.commands.view._get_detailed_package_info",
+                side_effect=OSError("permission denied"),
+            ):
+                result = self.runner.invoke(cli, ["view", "eorg/erepo"])
+        assert result.exit_code == 1
+        assert "error" in result.output.lower()
