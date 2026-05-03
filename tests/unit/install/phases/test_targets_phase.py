@@ -384,3 +384,76 @@ class TestCoworkLinuxSpecificMessage:
         msg = ctx.logger.error.call_args[0][0]
         assert "no auto-detection on Linux" not in msg
         assert "no OneDrive path detected" in msg
+
+
+# ---------------------------------------------------------------------------
+# TestExplicitTargetDirCreation (phase-level, not logic-replay)
+# ---------------------------------------------------------------------------
+
+
+class TestExplicitTargetDirCreation:
+    """Verify that install/phases/targets.run() creates root_dir correctly.
+
+    These tests exercise the actual production loop in targets.py rather than
+    reimplementing it inline (logic-replay anti-pattern addressed in #768).
+    """
+
+    def test_explicit_target_creates_dir_for_auto_create_false(
+        self, tmp_path: Path, inject_config: Any
+    ) -> None:
+        """target_override='claude' creates .claude/ even though auto_create=False."""
+        inject_config({})
+        claude = KNOWN_TARGETS["claude"]
+        assert claude.auto_create is False
+
+        ctx = _make_ctx(tmp_path, target_override="claude")
+
+        with (
+            patch("apm_cli.integration.targets.resolve_targets", return_value=[claude]),
+            patch("apm_cli.core.target_detection.detect_target"),
+        ):
+            from apm_cli.install.phases.targets import run
+
+            run(ctx)
+
+        assert (ctx.project_root / ".claude").is_dir()
+
+    def test_auto_detect_skips_dir_for_auto_create_false(
+        self, tmp_path: Path, inject_config: Any
+    ) -> None:
+        """Without target_override, auto_create=False targets don't get dirs created."""
+        inject_config({})
+        claude = KNOWN_TARGETS["claude"]
+        assert claude.auto_create is False
+
+        ctx = _make_ctx(tmp_path, target_override=None)
+
+        with (
+            patch("apm_cli.integration.targets.resolve_targets", return_value=[claude]),
+            patch("apm_cli.core.target_detection.detect_target"),
+        ):
+            from apm_cli.install.phases.targets import run
+
+            run(ctx)
+
+        assert not (ctx.project_root / ".claude").exists()
+
+    def test_auto_create_true_always_creates_dir_even_without_explicit(
+        self, tmp_path: Path, inject_config: Any
+    ) -> None:
+        """auto_create=True targets create their dir regardless of target_override."""
+        inject_config({})
+        copilot = KNOWN_TARGETS["copilot"]
+        assert copilot.auto_create is True
+
+        ctx = _make_ctx(tmp_path, target_override=None)
+
+        with (
+            patch("apm_cli.integration.targets.resolve_targets", return_value=[copilot]),
+            patch("apm_cli.core.target_detection.detect_target"),
+        ):
+            from apm_cli.install.phases.targets import run
+
+            run(ctx)
+
+        assert (ctx.project_root / ".github").is_dir()
