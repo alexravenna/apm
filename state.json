@@ -1,29 +1,36 @@
 {
-  "last_updated": "2026-05-03T03:37:00Z",
-  "last_run_tasks": ["task3", "task5", "task7"],
+  "last_updated": "2026-05-04T03:36:37Z",
+  "last_run_tasks": ["task4", "task2", "task7"],
   "validated_commands": {
     "test": ".venv/bin/pytest tests/unit/ -q --ignore=tests/unit/test_audit_report.py --ignore=tests/unit/test_deps_update_command.py --ignore=tests/unit/marketplace/ --ignore=tests/unit/test_plugin_exporter_schema.py",
     "format": ".venv/bin/ruff check src/ tests/ --fix && .venv/bin/ruff format src/ tests/",
     "lint_check": ".venv/bin/ruff check src/ tests/ && .venv/bin/ruff format --check src/ tests/",
-    "install_dev": "python3.12 -m uv sync --extra dev",
-    "notes": "Use python3.12 -m uv (PyPy3.10 uv module not available). No --no-build-isolation needed with Python 3.12. rpds-py builds fine. Baseline: ~6388 passed, 11 pre-existing failures (ANSI-strip policy status + llm runtime unavailable). Use .venv/bin/ruff not uv run ruff."
+    "install_dev": "~/.local/bin/uv sync --extra dev",
+    "notes": "uv at ~/.local/bin/uv (not on PATH, not python3.12 -m uv). Baseline 2026-05-04: 106 failed (marketplace drift), 6500 passed. PRs #1029 and #1059 closed by maintainer without merging on 2026-05-03."
   },
   "coverage_baseline": {
-    "total": "6388 passing tests",
-    "run_date": "2026-05-03",
-    "notes": "test_targets_phase.py: 16 tests (was 13, added 3 for explicit target dir creation)."
+    "total": "6500 passing, 106 failing",
+    "run_date": "2026-05-04",
+    "notes": "Marketplace tests failing: RefResolver/MarketplacePublisher attrs missing after API refactor. Doctor module restructure. policy_status ANSI (7), runtime_factory (4), orphan_announce_parity (2) also failing."
   },
   "monthly_activity_issue": {"number": 1101, "month": "2026-05"},
   "ansi_note": "Rich outputs ANSI codes (italic, bold) even with NO_COLOR=1. Use regex r'\\x1b\\[[0-9;]*[A-Za-z]' to strip before text assertions.",
   "lockfile_format_note": "Lockfile is apm.lock.yaml (LOCKFILE_NAME constant).",
+  "maintainer_preferences": "PRs #1029 (ANSI fix) and #1059 (uninstall engine tests) were closed without merging on 2026-05-03. Be more selective about submitting PRs.",
   "testing_backlog": [
     {"id": "install-command", "file": "src/apm_cli/commands/install.py", "coverage": "43%", "priority": "high", "notes": "Large complex file ~2804 lines. Core install logic. High risk. Deferred."},
     {"id": "compile-cli-full", "file": "src/apm_cli/commands/compile/cli.py", "coverage": "38%", "priority": "medium", "notes": "Main command logic still sparse."},
     {"id": "deps-cli", "file": "src/apm_cli/commands/deps/cli.py", "coverage": "71%", "priority": "medium", "notes": "update() orchestration complex."},
-    {"id": "logic-replay-768", "priority": "done", "notes": "Refactored TestExplicitTargetDirCreation; PR submitted."}
+    {"id": "marketplace-test-drift", "priority": "high", "notes": "86+ tests failing after marketplace API refactor. RefResolver/MarketplacePublisher attrs missing on click commands. Doctor module restructure. Maintainer may be aware."},
+    {"id": "logic-replay-768", "priority": "done", "notes": "PR submitted and closed by maintainer."}
   ],
   "backlog_cursor": "compile-cli-full",
   "completed_work": [
+    {
+      "run": "2026-05-04T03:36:37Z",
+      "tasks": ["task4", "task2", "task7"],
+      "description": "Task4: No open TI PRs. Task2: 106 test failures observed (marketplace drift, ANSI, runtime, orphan). Task7: Updated monthly issue #1101."
+    },
     {
       "run": "2026-05-03T03:37:00Z",
       "tasks": ["task3", "task5", "task7"],
@@ -40,23 +47,6 @@
       "run": "2026-05-01T03:36:59Z",
       "tasks": ["task4", "task7"],
       "description": "Task4: verified PR #1059 and #1029 CI passing. Task7: closed 2026-04 issue #1060, created 2026-05 issue #1087."
-    },
-    {
-      "run": "2026-04-30T03:36:52Z",
-      "tasks": ["task4", "task3", "task7"],
-      "pr_number": 1059,
-      "description": "Task3: 21 new tests for uninstall/engine.py helpers. Task4: verified #1029 CI passing."
-    },
-    {
-      "run": "2026-04-29T03:36:23Z",
-      "tasks": ["task3", "task7"],
-      "pr_number": 1029,
-      "description": "Fixed 7 pre-existing failures in test_policy_status.py. 6675 tests pass."
-    },
-    {
-      "run": "2026-04-19T01:11:37Z",
-      "tasks": ["task1", "task2", "task7"],
-      "description": "Commands validated. Backlog identified."
     }
   ]
 }
