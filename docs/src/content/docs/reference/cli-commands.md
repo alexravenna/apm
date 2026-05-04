@@ -164,6 +164,17 @@ Exceptions:
 - APM packages whose ref/version changed in `apm.yml` are re-downloaded automatically (no `--update` needed)
 - `--force` remains available for full overwrite/reset scenarios
 
+**Performance and Progress UI:**
+
+`apm install` uses parallel dependency resolution and download for fast installs:
+
+- **Parallel BFS resolution**: Dependencies are resolved level-by-level in parallel batches.
+- **Persistent two-tier cache**: Git repos and HTTP packages are cached on disk; cache hits are validated with `rev-parse HEAD` (git) or ETag revalidation (HTTP), so repeated installs skip redundant network fetches.
+- **In-run dedup**: Multiple subdirectory deps from the same repo share one clone per install.
+- **Live progress**: An ASCII progress bar shows resolution and download progress in real time.
+- **Elapsed time**: Total elapsed time is shown on every exit path (including errors).
+- **Per-phase timing** (`--verbose`): Each phase (resolve, download, integrate) reports its individual duration.
+
 **Stale-file cleanup:**
 
 `apm install` removes files that a still-present package previously deployed but no longer produces -- for example after a package renames or drops a primitive. This keeps the workspace consistent with the manifest without any manual `apm prune`/`uninstall` step. Behaviour:
@@ -291,7 +302,7 @@ APM automatically detects which integrations to enable based on your project str
 
 - **VSCode integration**: Enabled when `.github/` directory exists
 - **Claude integration**: Enabled when `.claude/` directory exists
-- **Cursor integration**: Enabled when `.cursor/` directory exists
+- **Cursor integration**: Enabled when `.cursor/` directory exists. Cursor slash command support (Cursor 1.6+): `.prompt.md` files are deployed to `.cursor/commands/*.md`
 - **OpenCode integration**: Enabled when `.opencode/` directory exists
 - **Codex integration**: Enabled when `.codex/` directory exists
 - **Gemini integration**: Enabled when `.gemini/` directory exists
@@ -316,7 +327,7 @@ When you run `apm install`, APM automatically integrates primitives from install
 After installation completes, APM prints a grouped diagnostic summary instead of inline warnings. Categories include collisions (skipped files), cross-package skill replacements, warnings, and errors.
 
 - **Normal mode**: Shows counts and actionable tips (e.g., "9 files skipped -- use `apm install --force` to overwrite")
-- **Verbose mode** (`--verbose`): Additionally lists individual file paths grouped by package, full error details, and **the resolved auth source per remote host** (e.g., `[i] dev.azure.com -- using bearer from az cli (source: AAD_BEARER_AZ_CLI)` or `[i] github.com -- token from GITHUB_APM_PAT`). Useful for diagnosing PAT vs. Entra-ID-bearer behaviour against Azure DevOps. For subdirectory packages with an explicit `#ref` (e.g. `owner/repo/sub#v1.2.0`), `--verbose` also shows each validation probe attempt -- marker-file lookups, the Contents API directory probe, and the `git ls-remote` fallback -- including which auth step (token, credential-helper, SSH) resolved the ref.
+- **Verbose mode** (`--verbose`): Additionally lists individual file paths grouped by package, full error details, **per-phase timing** (resolve / download / integrate durations), and **the resolved auth source per remote host** (e.g., `[i] dev.azure.com -- using bearer from az cli (source: AAD_BEARER_AZ_CLI)` or `[i] github.com -- token from GITHUB_APM_PAT`). Useful for diagnosing PAT vs. Entra-ID-bearer behaviour against Azure DevOps. For subdirectory packages with an explicit `#ref` (e.g. `owner/repo/sub#v1.2.0`), `--verbose` also shows each validation probe attempt -- marker-file lookups, the Contents API directory probe, and the `git ls-remote` fallback -- including which auth step (token, credential-helper, SSH) resolved the ref.
 
 ```bash
 # See exactly which files were skipped or had issues, and which auth source was used
@@ -333,10 +344,11 @@ APM also integrates with Claude Code when `.claude/` directory exists:
 
 **Skill Integration:**
 
-Skills are copied directly to target directories:
+Skills are copied to the converged cross-client directory by default:
 
-- **Primary**: `.github/skills/{skill-name}/` — Entire skill folder copied
-- **Compatibility**: `.claude/skills/{skill-name}/` — Also copied if `.claude/` folder exists
+- **Primary (converged)**: `.agents/skills/{skill-name}/` — Shared by Copilot, Cursor, OpenCode, Codex, and Gemini
+- **Claude**: `.claude/skills/{skill-name}/` — Claude retains its own per-client path
+- Pass `--legacy-skill-paths` (or set `APM_LEGACY_SKILL_PATHS=1`) to restore the old per-client layout (`.github/skills/`, `.cursor/skills/`, etc.)
 
 **Example Integration Output**:
 ```
@@ -391,7 +403,7 @@ apm uninstall -g microsoft/apm-sample-package
 | Integrated agents | `.github/agents/*.agent.md` |
 | Integrated chatmodes | `.github/agents/*.agent.md` |
 | Claude commands | `.claude/commands/*.md` |
-| Skill folders | `.github/skills/{folder-name}/` |
+| Skill folders | `.agents/skills/{folder-name}/` (converged); `.claude/skills/` for Claude |
 | Integrated hooks | `.github/hooks/*.json` |
 | Claude hook settings | `.claude/settings.json` (hooks key cleaned) |
 | Cursor rules | `.cursor/rules/*.mdc` |
