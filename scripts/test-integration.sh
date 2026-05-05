@@ -366,6 +366,7 @@ run_e2e_tests() {
         log_error "Integration test suite reported failures"
         exit 1
     fi
+
 }
 
 # Main execution
