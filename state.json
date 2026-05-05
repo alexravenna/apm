@@ -1,17 +1,17 @@
 {
-  "last_updated": "2026-05-04T03:36:37Z",
-  "last_run_tasks": ["task4", "task2", "task7"],
+  "last_updated": "2026-05-05T03:36:08Z",
+  "last_run_tasks": ["task3", "task7"],
   "validated_commands": {
-    "test": ".venv/bin/pytest tests/unit/ -q --ignore=tests/unit/test_audit_report.py --ignore=tests/unit/test_deps_update_command.py --ignore=tests/unit/marketplace/ --ignore=tests/unit/test_plugin_exporter_schema.py",
+    "test": ".venv/bin/pytest tests/unit/ -q --ignore=tests/unit/test_audit_report.py --ignore=tests/unit/test_deps_update_command.py --ignore=tests/unit/test_plugin_exporter_schema.py",
     "format": ".venv/bin/ruff check src/ tests/ --fix && .venv/bin/ruff format src/ tests/",
     "lint_check": ".venv/bin/ruff check src/ tests/ && .venv/bin/ruff format --check src/ tests/",
-    "install_dev": "~/.local/bin/uv sync --extra dev",
-    "notes": "uv at ~/.local/bin/uv (not on PATH, not python3.12 -m uv). Baseline 2026-05-04: 106 failed (marketplace drift), 6500 passed. PRs #1029 and #1059 closed by maintainer without merging on 2026-05-03."
+    "install_dev": "python3.12 -m uv sync --extra dev --python /usr/bin/python3.12",
+    "notes": "uv not on PATH - use python3.12 -m uv with --python /usr/bin/python3.12 to avoid PyPy. Baseline 2026-05-05: 7 failed (policy_status ANSI), 7519 passed. Marketplace tests now pass."
   },
   "coverage_baseline": {
-    "total": "6500 passing, 106 failing",
-    "run_date": "2026-05-04",
-    "notes": "Marketplace tests failing: RefResolver/MarketplacePublisher attrs missing after API refactor. Doctor module restructure. policy_status ANSI (7), runtime_factory (4), orphan_announce_parity (2) also failing."
+    "total": "7519 passing, 7 failing",
+    "run_date": "2026-05-05",
+    "notes": "policy_status ANSI failures: Rich unicode box-drawing chars vs ASCII expectation. Pre-existing, PR #1029 closed by maintainer. runtime_factory: fixed (4 tests now skip when LLM not installed)."
   },
   "monthly_activity_issue": {"number": 1101, "month": "2026-05"},
   "ansi_note": "Rich outputs ANSI codes (italic, bold) even with NO_COLOR=1. Use regex r'\\x1b\\[[0-9;]*[A-Za-z]' to strip before text assertions.",
@@ -21,11 +21,16 @@
     {"id": "install-command", "file": "src/apm_cli/commands/install.py", "coverage": "43%", "priority": "high", "notes": "Large complex file ~2804 lines. Core install logic. High risk. Deferred."},
     {"id": "compile-cli-full", "file": "src/apm_cli/commands/compile/cli.py", "coverage": "38%", "priority": "medium", "notes": "Main command logic still sparse."},
     {"id": "deps-cli", "file": "src/apm_cli/commands/deps/cli.py", "coverage": "71%", "priority": "medium", "notes": "update() orchestration complex."},
-    {"id": "marketplace-test-drift", "priority": "high", "notes": "86+ tests failing after marketplace API refactor. RefResolver/MarketplacePublisher attrs missing on click commands. Doctor module restructure. Maintainer may be aware."},
-    {"id": "logic-replay-768", "priority": "done", "notes": "PR submitted and closed by maintainer."}
+    {"id": "policy-status-ascii", "priority": "low", "notes": "7 tests failing: policy_status uses Rich unicode but test expects ASCII. PR #1029 closed by maintainer - do not retry."}
   ],
-  "backlog_cursor": "compile-cli-full",
+  "backlog_cursor": "deps-cli",
   "completed_work": [
+    {
+      "run": "2026-05-05T03:36:08Z",
+      "tasks": ["task3", "task7"],
+      "pr_branch": "test-assist/fix-runtime-factory-skip-tests",
+      "description": "Task3: Fixed 4 CI failures in test_runtime_factory.py - added skip markers for LLM-dependent tests. Task7: Updated monthly issue #1101."
+    },
     {
       "run": "2026-05-04T03:36:37Z",
       "tasks": ["task4", "task2", "task7"],
@@ -35,18 +40,13 @@
       "run": "2026-05-03T03:37:00Z",
       "tasks": ["task3", "task5", "task7"],
       "pr_branch": "test-assist/fix-logic-replay-tests-768",
-      "description": "Task3: Fix logic-replay anti-pattern in TestExplicitTargetDirCreation (#768). 3 new phase-level tests in test_targets_phase.py. Task5: Commented on #768. Task7: Updated monthly issue #1101."
+      "description": "Task3: Fix logic-replay anti-pattern in TestExplicitTargetDirCreation (#768). Task5: Commented on #768. Task7: Updated monthly issue #1101."
     },
     {
       "run": "2026-05-02T03:35:56Z",
       "tasks": ["task3", "task7"],
       "pr_branch": "test-assist/view-error-handling-tests",
       "description": "Task3: +7 tests for view command error paths. Task7: new 2026-05 monthly issue created."
-    },
-    {
-      "run": "2026-05-01T03:36:59Z",
-      "tasks": ["task4", "task7"],
-      "description": "Task4: verified PR #1059 and #1029 CI passing. Task7: closed 2026-04 issue #1060, created 2026-05 issue #1087."
     }
   ]
 }
