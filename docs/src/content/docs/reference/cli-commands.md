@@ -1561,18 +1561,22 @@ apm marketplace package add SOURCE [OPTIONS]
 ```
 
 **Arguments:**
-- `SOURCE` - GitHub `owner/repo` reference
+- `SOURCE` - GitHub `owner/repo` reference (omit when `--upstream` is used)
 
 **Options:**
 - `--version TEXT` - Semver range constraint (e.g. `">=1.0.0"`)
 - `--ref TEXT` - Pin to a git ref (SHA, tag, or HEAD). Mutable refs are auto-resolved to SHA
 - `-d`, `--description TEXT` - Short description for the entry
 - `-s`, `--subdir TEXT` - Subdirectory inside source repo
+- `--upstream ALIAS` - Reference a registered upstream marketplace (mutually exclusive with `SOURCE`/`--subdir`). See [Marketplace Upstreams](../../guides/marketplace-upstreams/).
+- `--plugin NAME` - Plugin name in the upstream marketplace (used with `--upstream`; defaults to the entry's name)
+- `--name NAME` - Override the displayed package name in your marketplace
+- `--allow-head` - Permit upstream-sourced entries that resolve to a moving branch HEAD (warned)
 - `--include-prerelease` - Include pre-release versions
 - `--no-verify` - Skip remote repository verification
 - `--verbose` - Enable verbose output
 
-`--version` and `--ref` are mutually exclusive. When neither is provided, the current `HEAD` SHA is pinned automatically.
+`--version` and `--ref` are mutually exclusive. `SOURCE` and `--upstream` are mutually exclusive. When neither `--version` nor `--ref` is provided, the current `HEAD` SHA is pinned automatically.
 
 **Examples:**
 ```bash
@@ -1588,6 +1592,45 @@ apm marketplace package add acme/code-review
 # Add with description and skip verification (requires explicit --ref SHA)
 apm marketplace package add acme/code-review --ref abc123...40chars \
   --description "Code review skill" --no-verify
+
+# Add a package sourced from a registered upstream marketplace
+apm marketplace package add --upstream gitnexus --plugin gitnexus \
+  --name acme-gitnexus
+```
+
+#### `apm marketplace upstream` - Manage upstream marketplaces
+
+Curate plugins from external Claude Code marketplaces under your own
+allow-list. Subcommands edit `apm.yml -> marketplace.upstreams`. See
+the [Marketplace Upstreams guide](../../guides/marketplace-upstreams/)
+for the trust model and end-to-end example.
+
+```bash
+apm marketplace upstream add OWNER/REPO --alias ALIAS [OPTIONS]
+apm marketplace upstream list [--verbose]
+apm marketplace upstream remove ALIAS [--yes]
+```
+
+**`add` options:**
+- `--alias TEXT` (required) - Local alias used to reference the upstream from `packages[]`
+- `--ref TEXT` - Pin the upstream `marketplace.json` to a SHA or tag (mutable refs auto-resolve to SHA)
+- `--branch TEXT` - Track a mutable branch (requires `--allow-head`)
+- `--path TEXT` - Path to the upstream `marketplace.json` (default: `.claude-plugin/marketplace.json`)
+- `--host TEXT` - Git host (default: `github.com`; supports GHE/GHES)
+- `--allow-head` - Permit branch HEAD tracking (warned at build time)
+
+**Examples:**
+```bash
+# Register a public upstream pinned to a SHA
+apm marketplace upstream add abhigyanpatwari/GitNexus \
+  --alias gitnexus \
+  --ref abc1234...40chars
+
+# List registered upstreams
+apm marketplace upstream list
+
+# Remove an upstream (rejects if any package still references it)
+apm marketplace upstream remove gitnexus --yes
 ```
 
 #### `apm marketplace package set` - Update a package entry

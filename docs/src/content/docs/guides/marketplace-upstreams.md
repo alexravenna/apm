@@ -34,7 +34,7 @@ apm marketplace upstream add abhigyanpatwari/GitNexus \
   --alias gitnexus \
   --ref <40-char-sha-or-tag>
 
-# 2. List which plugins the upstream advertises (read-only)
+# 2. Confirm the upstream is registered in apm.yml
 apm marketplace upstream list
 
 # 3. Expose one plugin under your own display name

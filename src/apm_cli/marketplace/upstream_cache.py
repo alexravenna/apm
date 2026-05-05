@@ -479,6 +479,18 @@ def _default_fetch_via_github_api(
         )
     except UpstreamCacheError:
         raise
+    except requests.HTTPError as exc:
+        # Drop the response object from the exception chain. ``exc.response``
+        # carries the original ``request.headers`` dict which includes the
+        # ``Authorization: token <PAT>`` header set in ``_do_fetch``. Logging
+        # frameworks that walk ``__cause__`` could otherwise leak the
+        # curator's PAT. Re-raise with status + URL only.
+        status = exc.response.status_code if exc.response is not None else "?"
+        raise UpstreamCacheError(
+            f"failed to fetch upstream manifest for "
+            f"{key.host}/{key.owner}/{key.repo}@{key.sha[:8]} {key.path}: "
+            f"HTTP {status}"
+        ) from None
     except Exception as exc:
         raise UpstreamCacheError(
             f"failed to fetch upstream manifest for "

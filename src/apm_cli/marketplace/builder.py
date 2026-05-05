@@ -1296,19 +1296,26 @@ class MarketplaceBuilder:
 
         # Lift upstream resolver diagnostics into the structured
         # diagnostics so existing CLI rendering picks them up. Error and
-        # warning levels survive; codes are preserved.
+        # warning levels survive; codes are preserved. Warning-level
+        # entries are also lifted into ``build_warnings`` so the existing
+        # ``logger.warning()`` rendering path in ``pack.py`` surfaces
+        # them. Status symbols are NOT baked into the message; the
+        # rendering layer adds them via ``CommandLogger`` based on level.
+        warning_messages: list[str] = list(build_warnings)
         for diag in result.upstream_diagnostics:
-            prefix = "[x]" if diag.level == "error" else "[!]" if diag.level == "warning" else "[i]"
             label_parts: list[str] = []
             if diag.upstream_alias:
                 label_parts.append(f"upstream '{diag.upstream_alias}'")
             if diag.plugin_name:
                 label_parts.append(f"plugin '{diag.plugin_name}'")
             label = " / ".join(label_parts)
-            message = f"{prefix} {label}: {diag.message}" if label else f"{prefix} {diag.message}"
+            message = f"{label}: {diag.message}" if label else diag.message
             build_diagnostics.append(
                 BuildDiagnostic(level=diag.level, message=message, code=diag.code)
             )
+            if diag.level == "warning":
+                warning_messages.append(message)
+        build_warnings = warning_messages
 
         output_path = self._output_path()
 

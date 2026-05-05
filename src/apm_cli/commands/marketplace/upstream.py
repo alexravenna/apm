@@ -17,6 +17,26 @@ from ...marketplace.yml_editor import (
 from .plugin import _SHA_RE, _ensure_yml_exists
 
 
+def _build_resolver(repo: str, host: str | None):
+    """Build a ``RefResolver`` configured for the upstream's host + auth.
+
+    Resolves the per-host token via ``AuthResolver`` so private upstream
+    repos and GHE/GHES hosts work transparently. Owner is derived from
+    *repo* (``owner/name``) so org-scoped credentials match.
+    """
+    from ...core.auth import AuthResolver
+    from ...marketplace.ref_resolver import RefResolver
+
+    target_host = host or "github.com"
+    org = repo.split("/", 1)[0] if "/" in repo else None
+    try:
+        ctx = AuthResolver().resolve(target_host, org=org)
+        token = ctx.token
+    except Exception:
+        token = None
+    return RefResolver(host=target_host, token=token)
+
+
 @click.group(help="Manage upstream marketplaces in authoring config")
 def upstream():
     """Add, list, or remove upstream marketplaces in apm.yml."""
@@ -32,12 +52,9 @@ def _verify_upstream_repo(logger: CommandLogger, repo: str, host: str | None) ->
 
     Soft-warns on offline; hard-errors on definitive miss.
     """
-    from ...marketplace.ref_resolver import RefResolver
-
-    target = f"https://{host}/{repo}" if host else repo
-    resolver = RefResolver()
+    resolver = _build_resolver(repo, host)
     try:
-        resolver.list_remote_refs(target)
+        resolver.list_remote_refs(repo)
     except GitLsRemoteError as exc:
         logger.error(
             f"Upstream '{repo}' is not reachable: {exc}",
@@ -65,12 +82,9 @@ def _resolve_upstream_ref_to_sha(
     if _SHA_RE.match(ref):
         return ref
 
-    from ...marketplace.ref_resolver import RefResolver
-
-    target = f"https://{host}/{repo}" if host else repo
-    resolver = RefResolver()
+    resolver = _build_resolver(repo, host)
     try:
-        refs = resolver.list_remote_refs(target)
+        refs = resolver.list_remote_refs(repo)
     except OfflineMissError:
         logger.warning(
             f"Offline: cannot resolve ref '{ref}' for {repo}; storing as-is.",
