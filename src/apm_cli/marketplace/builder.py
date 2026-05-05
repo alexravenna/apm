@@ -43,10 +43,22 @@ from .errors import (
     OfflineMissError,  # noqa: F401
     RefNotFoundError,
 )
+from .models import parse_marketplace_json
 from .ref_resolver import RefResolver, RemoteRef  # noqa: F401
 from .semver import SemVer, parse_semver, satisfies_range
 from .tag_pattern import build_tag_regex, render_tag  # noqa: F401
-from .yml_schema import MarketplaceYml, PackageEntry, load_marketplace_yml
+from .upstream_cache import UpstreamCache
+from .upstream_resolver import (
+    ResolvedUpstreamPackage,
+    UpstreamResolver,
+    UpstreamResolverDiagnostic,
+)
+from .yml_schema import (
+    MarketplaceYml,
+    PackageEntry,
+    UpstreamPackageEntry,
+    load_marketplace_yml,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +78,17 @@ __all__ = [
 
 @dataclass(frozen=True)
 class BuildDiagnostic:
-    """Structured diagnostic emitted during marketplace.json composition."""
+    """Structured diagnostic emitted during marketplace.json composition.
 
-    level: str  # "warning" | "verbose"
+    Levels: ``"verbose"`` (info-only), ``"warning"`` (non-fatal),
+    ``"error"`` (fatal -- ``build()`` will raise BuildError before
+    writing). Optional ``code`` is a stable identifier for upstream
+    diagnostics so callers can match without parsing message text.
+    """
+
+    level: str  # "verbose" | "warning" | "error"
     message: str
+    code: str = ""
 
 
 @dataclass(frozen=True)
@@ -92,6 +111,8 @@ class ResolveResult:
 
     entries: tuple[ResolvedPackage, ...]
     errors: tuple[tuple[str, str], ...]  # (package name, error message) pairs
+    upstream_entries: tuple[ResolvedUpstreamPackage, ...] = ()
+    upstream_diagnostics: tuple[UpstreamResolverDiagnostic, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -113,6 +134,8 @@ class BuildReport:
     removed_count: int = 0
     output_path: Path = field(default_factory=lambda: Path("."))
     dry_run: bool = False
+    upstream_resolved: tuple[ResolvedUpstreamPackage, ...] = ()
+    upstream_diagnostics: tuple[UpstreamResolverDiagnostic, ...] = ()
 
 
 @dataclass
@@ -486,60 +509,213 @@ class MarketplaceBuilder:
     def resolve(self) -> ResolveResult:
         """Resolve every entry concurrently.
 
+        Direct (:class:`PackageEntry`) and upstream-sourced
+        (:class:`UpstreamPackageEntry`) entries are partitioned by
+        ``isinstance``. Direct entries follow the existing concurrent
+        ``git ls-remote`` path; upstream entries are resolved through
+        :class:`UpstreamResolver`, which owns its own cache, atomic-fetch
+        invariant, and rename guard.
+
         Returns
         -------
         ResolveResult
-            Contains resolved entries and any errors encountered.
+            Contains resolved direct entries, resolved upstream entries,
+            any per-package errors, and any structured upstream
+            diagnostics.
 
         Raises
         ------
         BuildError
-            On any resolution failure (unless ``continue_on_error``).
+            On any direct-resolution failure (unless ``continue_on_error``).
+            Upstream failures are always collected as diagnostics and
+            error rows; ``build()`` raises ``BuildError`` before writing
+            output when any error diagnostics are present.
         """
         yml = self._load_yml()
-        entries = yml.packages
-        if not entries:
+        all_entries = yml.packages
+        if not all_entries:
             return ResolveResult(entries=(), errors=())
+
+        direct_entries: list[tuple[int, PackageEntry]] = []
+        upstream_entries: list[tuple[int, UpstreamPackageEntry]] = []
+        for idx, entry in enumerate(all_entries):
+            if isinstance(entry, UpstreamPackageEntry):
+                upstream_entries.append((idx, entry))
+            else:
+                direct_entries.append((idx, entry))
 
         results: dict[int, ResolvedPackage] = {}
         errors: list[tuple[str, str]] = []
 
-        # Eagerly resolve auth + create the shared RefResolver before
-        # spawning workers -- avoids a race on _ensure_auth() and
-        # matches the pattern used in _prefetch_metadata().
-        self._get_resolver()
+        # -- direct path (existing concurrent ls-remote flow) ---------------
+        if direct_entries:
+            # Eagerly resolve auth + create the shared RefResolver before
+            # spawning workers -- avoids a race on _ensure_auth() and
+            # matches the pattern used in _prefetch_metadata().
+            self._get_resolver()
 
-        with ThreadPoolExecutor(max_workers=min(self._options.concurrency, len(entries))) as pool:
-            future_to_index = {
-                pool.submit(self._resolve_entry, entry): idx for idx, entry in enumerate(entries)
-            }
-            for future in as_completed(future_to_index):
-                idx = future_to_index[future]
-                entry = entries[idx]
-                try:
-                    resolved = future.result(timeout=self._options.timeout_seconds)
-                    results[idx] = resolved
-                except BuildError as exc:
-                    if self._options.continue_on_error:
-                        errors.append((entry.name, str(exc)))
-                    else:
-                        raise
-                except Exception as exc:
-                    logger.debug("Unexpected error resolving '%s'", entry.name, exc_info=True)
-                    if self._options.continue_on_error:
-                        errors.append((entry.name, str(exc)))
-                    else:
-                        raise BuildError(
-                            f"Unexpected error resolving '{entry.name}': {exc}",
-                            package=entry.name,
-                        ) from exc
+            with ThreadPoolExecutor(
+                max_workers=min(self._options.concurrency, len(direct_entries))
+            ) as pool:
+                future_to_index = {
+                    pool.submit(self._resolve_entry, entry): idx for idx, entry in direct_entries
+                }
+                for future in as_completed(future_to_index):
+                    idx = future_to_index[future]
+                    entry = all_entries[idx]
+                    try:
+                        resolved = future.result(timeout=self._options.timeout_seconds)
+                        results[idx] = resolved
+                    except BuildError as exc:
+                        if self._options.continue_on_error:
+                            errors.append((entry.name, str(exc)))
+                        else:
+                            raise
+                    except Exception as exc:
+                        logger.debug("Unexpected error resolving '%s'", entry.name, exc_info=True)
+                        if self._options.continue_on_error:
+                            errors.append((entry.name, str(exc)))
+                        else:
+                            raise BuildError(
+                                f"Unexpected error resolving '{entry.name}': {exc}",
+                                package=entry.name,
+                            ) from exc
 
-        # Return in yml order
-        ordered: list[ResolvedPackage] = []
-        for idx in range(len(entries)):
+        # -- direct results ordered by yml index ---------------------------
+        ordered_direct: list[ResolvedPackage] = []
+        for idx in range(len(all_entries)):
             if idx in results:
-                ordered.append(results[idx])
-        return ResolveResult(entries=tuple(ordered), errors=tuple(errors))
+                ordered_direct.append(results[idx])
+
+        # -- upstream path -------------------------------------------------
+        upstream_resolved: list[ResolvedUpstreamPackage] = []
+        upstream_diagnostics: list[UpstreamResolverDiagnostic] = []
+        if upstream_entries:
+            resolver = self._build_upstream_resolver(yml)
+            entries_only = [e for _, e in upstream_entries]
+            upstream_resolved, upstream_diagnostics = resolver.resolve_all(entries_only)
+            # Lift error-level upstream diagnostics into the errors list
+            # so the orchestrator and ``build()`` can react uniformly.
+            for diag in upstream_diagnostics:
+                if diag.level == "error":
+                    label = diag.plugin_name or diag.upstream_alias or "upstream"
+                    errors.append((label, diag.message))
+
+        return ResolveResult(
+            entries=tuple(ordered_direct),
+            errors=tuple(errors),
+            upstream_entries=tuple(upstream_resolved),
+            upstream_diagnostics=tuple(upstream_diagnostics),
+        )
+
+    # -- upstream resolver wiring -------------------------------------------
+
+    def _build_upstream_resolver(self, yml: MarketplaceYml) -> UpstreamResolver:
+        """Construct an :class:`UpstreamResolver` for this build.
+
+        v1 constraint: only ``github.com`` upstreams are wired; entries
+        targeting any other host yield an error diagnostic from
+        :meth:`UpstreamResolver.resolve_all`. Cross-host fan-out is
+        slated for v2.
+        """
+        upstreams_by_alias = {u.alias: u for u in yml.upstreams}
+
+        # Lazy per-host RefResolver cache. ``_get_resolver()`` is reused
+        # for the curator's host; other hosts get fresh instances with
+        # auth resolved per-host (never inherit the curator's token).
+        host_resolvers: dict[str, RefResolver] = {}
+
+        def _resolver_for_host(host: str) -> RefResolver:
+            if host not in host_resolvers:
+                if host == self._host:
+                    host_resolvers[host] = self._get_resolver()
+                else:
+                    # v1: only github.com is supported. Construct an
+                    # unauthenticated RefResolver so we never leak the
+                    # curator's PAT to a foreign host.
+                    host_resolvers[host] = RefResolver(
+                        timeout_seconds=self._options.timeout_seconds,
+                        offline=self._options.offline,
+                        host=host,
+                        token=None,
+                    )
+            return host_resolvers[host]
+
+        def ref_to_sha(host: str, owner: str, repo: str, ref_or_branch: str) -> str:
+            # SHA short-circuit -- offline-safe, no network.
+            if _SHA40_RE.match(ref_or_branch):
+                return ref_or_branch
+            if self._options.offline:
+                # Cannot resolve a non-SHA ref offline.
+                raise BuildError(f"cannot resolve ref '{ref_or_branch}' offline for {owner}/{repo}")
+            resolver = _resolver_for_host(host)
+            owner_repo = f"{owner}/{repo}"
+            refs = resolver.list_remote_refs(owner_repo)
+            for remote in refs:
+                # Match tags and branches by their unqualified name.
+                if remote.name == f"refs/tags/{ref_or_branch}":
+                    return remote.sha
+                if remote.name == f"refs/heads/{ref_or_branch}":
+                    return remote.sha
+            raise BuildError(
+                f"ref '{ref_or_branch}' not found in {owner}/{repo}",
+            )
+
+        def version_range_resolver(
+            host: str,
+            owner: str,
+            repo: str,
+            semver_range: str,
+            *,
+            tag_pattern: str | None = None,
+            include_prerelease: bool = False,
+        ) -> tuple[str, str]:
+            resolver = _resolver_for_host(host)
+            owner_repo = f"{owner}/{repo}"
+            pattern = tag_pattern or yml.build.tag_pattern
+            tag_rx = build_tag_regex(pattern)
+            refs = resolver.list_remote_refs(owner_repo)
+            candidates: list[tuple[SemVer, str, str]] = []
+            for remote in refs:
+                if not remote.name.startswith("refs/tags/"):
+                    continue
+                tag_name = remote.name[len("refs/tags/") :]
+                m = tag_rx.match(tag_name)
+                if not m:
+                    continue
+                version_str = m.group("version")
+                sv = parse_semver(version_str)
+                if sv is None:
+                    continue
+                if sv.is_prerelease and not (
+                    include_prerelease or self._options.include_prerelease
+                ):
+                    continue
+                if satisfies_range(sv, semver_range):
+                    candidates.append((sv, tag_name, remote.sha))
+            if not candidates:
+                raise BuildError(
+                    f"no version of {owner}/{repo} matches '{semver_range}' (pattern='{pattern}')"
+                )
+            candidates.sort(key=lambda c: c[0], reverse=True)
+            _, best_tag, best_sha = candidates[0]
+            return best_tag, best_sha
+
+        # v1: pass canonical_full_name=None to skip the rename guard at
+        # build time. Lockfile-side pinning + strict source-shape parsing
+        # already provide tamper detection. Wiring AuthResolver-routed
+        # GitHub REST calls is tracked as a follow-up todo so this
+        # builder integration is testable end-to-end without proliferating
+        # network mocks.
+        return UpstreamResolver(
+            upstreams=upstreams_by_alias,
+            cache=UpstreamCache(),
+            ref_to_sha=ref_to_sha,
+            canonical_full_name=None,
+            version_range_resolver=version_range_resolver,
+            auth_resolver=self._auth_resolver,
+            offline=self._options.offline,
+        )
 
     # -- remote description fetcher -----------------------------------------
 
@@ -694,7 +870,12 @@ class MarketplaceBuilder:
 
     # -- composition --------------------------------------------------------
 
-    def compose_marketplace_json(self, resolved: list[ResolvedPackage]) -> dict[str, Any]:
+    def compose_marketplace_json(
+        self,
+        resolved: list[ResolvedPackage],
+        *,
+        upstream_resolved: list[ResolvedUpstreamPackage] | None = None,
+    ) -> dict[str, Any]:
         """Produce an Anthropic-compliant marketplace.json dict.
 
         All APM-only fields are stripped.  Key order follows the Anthropic
@@ -703,7 +884,12 @@ class MarketplaceBuilder:
         Parameters
         ----------
         resolved:
-            List of resolved packages (from ``resolve()``).
+            List of resolved direct packages (from ``resolve()``).
+        upstream_resolved:
+            Optional list of resolved upstream-sourced packages. Emitted
+            after ``resolved`` in the output ``plugins`` array. v1 does
+            not interleave upstream and direct entries; consumers see
+            direct emissions first, then upstream pass-throughs.
 
         Returns
         -------
@@ -717,7 +903,9 @@ class MarketplaceBuilder:
 
         # Build a name -> entry map so we can reach back for local-package
         # description / homepage that came from the yml itself.
-        entry_by_name: dict[str, PackageEntry] = {e.name: e for e in yml.packages}
+        entry_by_name: dict[str, PackageEntry] = {
+            e.name: e for e in yml.packages if not isinstance(e, UpstreamPackageEntry)
+        }
 
         doc: dict[str, Any] = OrderedDict()
         doc["name"] = yml.name
@@ -874,6 +1062,11 @@ class MarketplaceBuilder:
 
             plugins.append(plugin)
 
+        # -- upstream-sourced plugins --
+        if upstream_resolved:
+            for rup in upstream_resolved:
+                plugins.append(self._emit_upstream_plugin(rup))
+
         # Verbose summary line
         summary_parts: list[str] = []
         if plugin_root and strip_count > 0:
@@ -917,6 +1110,76 @@ class MarketplaceBuilder:
 
         doc["plugins"] = plugins
         return doc
+
+    # -- upstream emission --------------------------------------------------
+
+    def _emit_upstream_plugin(self, rup: ResolvedUpstreamPackage) -> dict[str, Any]:
+        """Emit a single upstream-sourced plugin entry.
+
+        Hard rules:
+
+        * Output is byte-for-byte Anthropic-conformant; **no APM-specific
+          keys** (no ``metadata.apm.*``). Provenance lives in
+          ``apm.lock.yaml`` only.
+        * Curator overrides on :class:`UpstreamPackageEntry` win over
+          upstream values for ``description``, ``version``, and ``tags``.
+          ``author``/``license``/``repository``/``homepage`` are
+          curator-only (the strict upstream parser does not surface
+          these fields, so there is nothing to fall back to).
+        * Source emission shape matches the direct-package emit shape so
+          ``parse_marketplace_json`` round-trips cleanly: outer
+          ``source`` key with inner ``source`` discriminator
+          (``"github"`` or ``"git-subdir"``), ``url`` for git-subdir.
+        """
+        entry = rup.entry
+        plugin: dict[str, Any] = OrderedDict()
+        plugin["name"] = entry.name
+
+        # description: curator override > upstream plugin's value
+        description = entry.description if entry.description else rup.plugin.description
+        if description:
+            plugin["description"] = description
+
+        # version: curator override (if a display version) > upstream value
+        if entry.version and _is_display_version(entry.version):
+            plugin["version"] = entry.version
+        elif rup.plugin.version:
+            plugin["version"] = rup.plugin.version
+
+        # author / license / repository (curator-only -- StrictPlugin
+        # does not carry these). Mirrors direct-emit behaviour.
+        if entry.author:
+            plugin["author"] = dict(entry.author)
+        if entry.license:
+            plugin["license"] = entry.license
+        if entry.repository:
+            plugin["repository"] = entry.repository
+
+        # tags: curator override > upstream plugin tags
+        tags = entry.tags or rup.plugin.tags
+        if tags:
+            plugin["tags"] = list(tags)
+
+        if entry.homepage:
+            plugin["homepage"] = entry.homepage
+
+        # source: shape matches direct emission so consumers using
+        # ``parse_marketplace_json`` see no difference.
+        source_obj: dict[str, Any] = OrderedDict()
+        if rup.plugin_subdir:
+            source_obj["source"] = "git-subdir"
+            source_obj["url"] = rup.plugin_repo
+            source_obj["path"] = rup.plugin_subdir
+        else:
+            source_obj["source"] = "github"
+            source_obj["repo"] = rup.plugin_repo
+        if rup.plugin_ref:
+            source_obj["ref"] = rup.plugin_ref
+        if rup.plugin_sha:
+            source_obj["sha"] = rup.plugin_sha
+        plugin["source"] = source_obj
+
+        return plugin
 
     # -- diff ---------------------------------------------------------------
 
@@ -1001,21 +1264,90 @@ class MarketplaceBuilder:
     # -- full pipeline ------------------------------------------------------
 
     def build(self) -> BuildReport:
-        """Full pipeline: load -> resolve -> compose -> write.
+        """Full pipeline: load -> resolve -> compose -> validate -> write.
 
         Returns
         -------
         BuildReport
-            Summary including diff statistics.
+            Summary including diff statistics and (when present) upstream
+            resolution diagnostics.
+
+        Raises
+        ------
+        BuildError
+            When any error-level diagnostic is present (resolution
+            failure, upstream rejection, round-trip mismatch). No
+            ``marketplace.json`` is written when an error is raised --
+            ``continue_on_error`` only governs whether multiple errors
+            are collected before raising; it never permits writing
+            broken output.
         """
         result = self.resolve()
         resolved = list(result.entries)
+        upstream_resolved = list(result.upstream_entries)
         errors = result.errors
 
-        new_json = self.compose_marketplace_json(resolved)
+        new_json = self.compose_marketplace_json(
+            resolved,
+            upstream_resolved=upstream_resolved,
+        )
         build_warnings = getattr(self, "_compose_warnings", ())
-        build_diagnostics = getattr(self, "_compose_diagnostics", ())
+        build_diagnostics = list(getattr(self, "_compose_diagnostics", ()))
+
+        # Lift upstream resolver diagnostics into the structured
+        # diagnostics so existing CLI rendering picks them up. Error and
+        # warning levels survive; codes are preserved.
+        for diag in result.upstream_diagnostics:
+            prefix = "[x]" if diag.level == "error" else "[!]" if diag.level == "warning" else "[i]"
+            label_parts: list[str] = []
+            if diag.upstream_alias:
+                label_parts.append(f"upstream '{diag.upstream_alias}'")
+            if diag.plugin_name:
+                label_parts.append(f"plugin '{diag.plugin_name}'")
+            label = " / ".join(label_parts)
+            message = f"{prefix} {label}: {diag.message}" if label else f"{prefix} {diag.message}"
+            build_diagnostics.append(
+                BuildDiagnostic(level=diag.level, message=message, code=diag.code)
+            )
+
         output_path = self._output_path()
+
+        # -- fail-closed gate before writing -------------------------------
+        # Upstream resolution failures must NEVER produce a published
+        # marketplace.json (they signal supply-chain or governance
+        # breaks: missing alias, rename detected, unsupported source
+        # shape). Direct-package errors continue to honour the existing
+        # ``continue_on_error`` semantics (skip the failed entry, emit
+        # the rest).
+        upstream_errors = [d for d in build_diagnostics if d.level == "error"]
+        if upstream_errors:
+            if self._resolver is not None:
+                self._resolver.close()
+            headline = upstream_errors[0].message
+            extra = len(upstream_errors) - 1
+            summary = headline if extra == 0 else f"{headline} (and {extra} more)"
+            raise BuildError(f"Build failed: {summary}")
+
+        # -- round-trip validation invariant -------------------------------
+        # Every emitted plugin must survive the lenient consumer parser
+        # used by ``apm browse``/``apm install`` resolution. Catches
+        # silent-skip discrepancies between the strict emission path and
+        # the consumer parser before consumers ever see the output.
+        try:
+            roundtrip = parse_marketplace_json(new_json)
+        except Exception as exc:
+            if self._resolver is not None:
+                self._resolver.close()
+            raise BuildError(f"Round-trip parse of emitted marketplace.json failed: {exc}") from exc
+        emitted_plugin_count = len(new_json.get("plugins", []))
+        roundtrip_count = len(roundtrip.plugins)
+        if roundtrip_count != emitted_plugin_count:
+            if self._resolver is not None:
+                self._resolver.close()
+            raise BuildError(
+                f"Round-trip parse dropped plugins: emitted "
+                f"{emitted_plugin_count}, parsed {roundtrip_count}"
+            )
 
         # Load existing for diff
         old_json = self._load_existing_json(output_path)
@@ -1042,6 +1374,8 @@ class MarketplaceBuilder:
             removed_count=removed,
             output_path=output_path,
             dry_run=self._options.dry_run,
+            upstream_resolved=tuple(upstream_resolved),
+            upstream_diagnostics=result.upstream_diagnostics,
         )
 
 
