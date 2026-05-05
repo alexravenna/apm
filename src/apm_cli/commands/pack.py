@@ -240,15 +240,13 @@ def _render_marketplace_result(logger, report, dry_run, extra_warnings=None):
         logger.warning(warn_msg)
     for warn_msg in report.warnings:
         logger.warning(warn_msg)
+    total_packages = len(report.resolved) + len(report.upstream_resolved)
     if dry_run or report.dry_run:
         logger.dry_run_notice(
-            f"Would write marketplace.json ({len(report.resolved)} package(s)) "
-            f"-> {report.output_path}"
+            f"Would write marketplace.json ({total_packages} package(s)) -> {report.output_path}"
         )
         return
-    logger.success(
-        f"Built marketplace.json ({len(report.resolved)} package(s)) -> {report.output_path}"
-    )
+    logger.success(f"Built marketplace.json ({total_packages} package(s)) -> {report.output_path}")
 
 
 @click.command(
