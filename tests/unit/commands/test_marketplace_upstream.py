@@ -210,3 +210,113 @@ class TestUpstreamRemove:
         result = runner.invoke(marketplace, ["upstream", "remove", "gitnexus"])
         assert result.exit_code == 2
         assert "still referenced" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# package add --upstream
+# ---------------------------------------------------------------------------
+
+
+class TestPackageAddUpstream:
+    def _add_upstream(self, runner, alias="gitnexus", repo="abhigyanpatwari/GitNexus"):
+        return runner.invoke(
+            marketplace,
+            [
+                "upstream",
+                "add",
+                repo,
+                "--alias",
+                alias,
+                "--ref",
+                SHA40,
+                "--no-verify",
+            ],
+        )
+
+    def test_happy_with_upstream(self, runner, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write_yml(tmp_path)
+        assert self._add_upstream(runner).exit_code == 0
+        result = runner.invoke(
+            marketplace,
+            [
+                "package",
+                "add",
+                "--upstream",
+                "gitnexus",
+                "--plugin",
+                "gitnexus",
+                "--name",
+                "acme-gitnexus",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        data = yaml.safe_load((tmp_path / "marketplace.yml").read_text())
+        pkg = data["packages"][0]
+        assert pkg["name"] == "acme-gitnexus"
+        assert pkg["upstream"] == "gitnexus"
+        assert pkg["plugin"] == "gitnexus"
+        assert "source" not in pkg
+
+    def test_source_xor_upstream(self, runner, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write_yml(tmp_path)
+        result = runner.invoke(
+            marketplace,
+            [
+                "package",
+                "add",
+                "acme/foo",
+                "--upstream",
+                "gitnexus",
+                "--no-verify",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "mutually exclusive" in result.output.lower()
+
+    def test_neither_source_nor_upstream(self, runner, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write_yml(tmp_path)
+        result = runner.invoke(marketplace, ["package", "add"])
+        assert result.exit_code != 0
+        assert "either a source" in result.output.lower()
+
+    def test_unknown_upstream_alias_exits_2(self, runner, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write_yml(tmp_path)
+        result = runner.invoke(
+            marketplace,
+            [
+                "package",
+                "add",
+                "--upstream",
+                "ghost",
+                "--plugin",
+                "x",
+                "--name",
+                "x",
+            ],
+        )
+        assert result.exit_code == 2
+        assert "not registered" in result.output.lower()
+
+    def test_subdir_rejected_with_upstream(self, runner, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write_yml(tmp_path)
+        assert self._add_upstream(runner).exit_code == 0
+        result = runner.invoke(
+            marketplace,
+            [
+                "package",
+                "add",
+                "--upstream",
+                "gitnexus",
+                "--plugin",
+                "gitnexus",
+                "--subdir",
+                "src",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "subdir only applies" in result.output.lower()

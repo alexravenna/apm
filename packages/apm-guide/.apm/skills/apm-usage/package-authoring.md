@@ -286,7 +286,40 @@ marketplace:
       description: Plugin shipped alongside this repo
       source: ./plugins/local-tool       # local path (no remote fetch)
       version: 0.1.0
+
+  upstreams:                              # optional; expose external-marketplace plugins
+    - alias: gitnexus                     # local handle
+      repo: abhigyanpatwari/GitNexus      # upstream marketplace repo
+      ref: <40-char-sha>                  # required for reproducibility
+      # branch: main                      # alternative to ref; requires allow_head: true
+      # path: .claude-plugin/marketplace.json   # default
+      # host: github.com                  # default
+      # allow_head: false                 # default; opt-in to mutable refs
 ```
+
+Add `packages[]` entries that reference `upstreams[].alias` to expose
+specific plugins from an upstream:
+
+```yaml
+marketplace:
+  upstreams:
+    - alias: gitnexus
+      repo: abhigyanpatwari/GitNexus
+      ref: <40-char-sha>
+  packages:
+    - name: acme-gitnexus     # display name in your marketplace
+      upstream: gitnexus      # references upstreams[].alias
+      plugin: gitnexus        # name in the upstream marketplace
+      version: ">=1.0.0"      # optional curator override
+```
+
+`source` and `upstream` are mutually exclusive on a single entry.
+Upstreams are a curated allow-list with build-time commit pinning;
+APM does NOT re-host upstream content -- consumer installs always
+fetch plugin source from the upstream git host. Provenance (manifest
+SHA, resolved plugin SHA, canonical owner) is recorded only in
+`apm.lock.yaml`; the emitted `marketplace.json` stays
+Anthropic-conformant.
 
 Schema rules:
 - `owner.name` is required. `name`, `description`, `version` are

@@ -37,7 +37,9 @@ APM has no runtime footprint. Once `apm install` or `apm compile` completes, the
 
 ## Dependency provenance
 
-APM resolves dependencies directly from git repositories. There is no intermediary registry, proxy, or mirror.
+APM resolves dependencies directly from git repositories. APM does not run an artifact registry or proxy server, and does not re-host third-party content.
+
+Curators MAY publish a marketplace that exposes plugins from external upstream marketplaces via the [marketplace upstreams](../../guides/marketplace-upstreams/) feature. Upstreams are a curated allow-list with build-time commit pinning -- not a binary mirror. Consumer installs always fetch plugin content from the original git host; APM never proxies or re-hosts that content. See [Marketplace upstreams: trust model](../../guides/marketplace-upstreams/#trust-model) for the full contract.
 
 ### Exact commit pinning
 

@@ -32,6 +32,7 @@ from .yml_schema import (
 __all__ = [
     "add_plugin_entry",
     "add_upstream_entry",
+    "add_upstream_package_entry",
     "list_upstream_entries",
     "remove_plugin_entry",
     "remove_upstream_entry",
@@ -447,3 +448,105 @@ def list_upstream_entries(yml_path: Path) -> list[dict]:
         # Materialise to a plain dict (drop ruamel CommentedMap wrapping).
         result.append({k: v for k, v in entry.items()})
     return result
+
+
+def add_upstream_package_entry(
+    yml_path: Path,
+    *,
+    upstream: str,
+    plugin: str | None = None,
+    name: str | None = None,
+    version: str | None = None,
+    ref: str | None = None,
+    tag_pattern: str | None = None,
+    tags: list[str] | None = None,
+    include_prerelease: bool = False,
+    allow_head: bool = False,
+    description: str | None = None,
+) -> str:
+    """Append an upstream-sourced ``packages[]`` entry.
+
+    Distinct from :func:`add_plugin_entry`: this writes ``upstream`` and
+    ``plugin`` keys instead of ``source``. The referenced upstream alias
+    must already exist in the ``upstreams:`` block.
+
+    Returns the resolved package name (``name`` or ``plugin``).
+    """
+    if version is not None and ref is not None:
+        raise MarketplaceYmlError("Cannot specify both 'version' and 'ref' -- pick one")
+
+    if not isinstance(upstream, str) or not upstream:
+        raise MarketplaceYmlError("'upstream' alias is required")
+
+    effective_plugin = plugin if plugin is not None else name
+    if not effective_plugin:
+        raise MarketplaceYmlError(
+            "Either 'plugin' or 'name' must be provided so the upstream plugin can be located"
+        )
+
+    if name is None:
+        name = effective_plugin
+
+    data, original_text = _load_rt(yml_path)
+    container = _get_marketplace_container(data)
+
+    # Verify the upstream alias is registered.
+    upstreams = container.get("upstreams") or []
+    alias_known = any(isinstance(u, dict) and u.get("alias") == upstream for u in upstreams)
+    if not alias_known:
+        raise MarketplaceYmlError(
+            f"Upstream alias '{upstream}' is not registered. "
+            f"Run 'apm marketplace upstream add <repo> --alias {upstream} ...' first."
+        )
+
+    packages = container.get("packages")
+    if packages is None:
+        from ruamel.yaml.comments import CommentedSeq
+
+        packages = CommentedSeq()
+        container["packages"] = packages
+
+    # Cross-shape duplicate-name check (case-insensitive).
+    lower = name.lower()
+    for entry in packages:
+        entry_name = entry.get("name", "")
+        if isinstance(entry_name, str) and entry_name.lower() == lower:
+            raise MarketplaceYmlError(f"Package '{name}' already exists")
+
+    # (upstream, plugin) tuple uniqueness check.
+    for entry in packages:
+        if (
+            isinstance(entry, dict)
+            and entry.get("upstream") == upstream
+            and (entry.get("plugin") or entry.get("name")) == effective_plugin
+        ):
+            raise MarketplaceYmlError(
+                f"Plugin '{effective_plugin}' from upstream '{upstream}' is already exposed"
+            )
+
+    from ruamel.yaml.comments import CommentedMap
+
+    new_entry = CommentedMap()
+    new_entry["name"] = name
+    new_entry["upstream"] = upstream
+    if plugin is not None and plugin != name:
+        new_entry["plugin"] = plugin
+
+    if version is not None:
+        new_entry["version"] = version
+    if ref is not None:
+        new_entry["ref"] = ref
+    if tag_pattern is not None:
+        new_entry["tag_pattern"] = tag_pattern
+    if include_prerelease:
+        new_entry["include_prerelease"] = True
+    if allow_head:
+        new_entry["allow_head"] = True
+    if tags is not None and len(tags) > 0:
+        new_entry["tags"] = tags
+    if description is not None:
+        new_entry["description"] = description
+
+    packages.append(new_entry)
+    _write_and_validate(yml_path, data, original_text)
+    return name

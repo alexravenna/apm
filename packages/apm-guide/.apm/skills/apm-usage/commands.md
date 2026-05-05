@@ -104,8 +104,12 @@ If no `--target`, no `targets:` in `apm.yml`, and no harness signal is present, 
 | `apm marketplace doctor` | Diagnose git, network, auth, and marketplace config readiness | `-v` |
 | `apm marketplace publish` | Open PRs on consumer repos from `consumer-targets.yml` | `--targets PATH`, `--dry-run`, `--no-pr`, `--draft`, `--allow-downgrade`, `--allow-ref-change`, `--parallel N`, `-y` |
 | `apm marketplace package add <source>` | Add a plugin entry to `marketplace.plugins` (source accepts `owner/repo` or `./path`) | `--name`, `--version`, `--ref` (mutable refs auto-resolved to SHA), `-d`/`--description`, `-s`/`--subdir`, `--tag-pattern`, `--tags`, `--include-prerelease`, `--no-verify` |
+| `apm marketplace package add --upstream <alias> --plugin <name>` | Expose an upstream marketplace's plugin (mutually exclusive with positional `<source>`) | `--name`, `--version`, `--ref`, `--tag-pattern`, `--tags`, `--include-prerelease`, `--allow-head` |
 | `apm marketplace package set <name>` | Update fields on an existing plugin entry | `--version`, `--ref` (mutable refs auto-resolved to SHA), `--description`, `--subdir`, `--tag-pattern`, `--tags`, `--include-prerelease` |
 | `apm marketplace package remove <name>` | Remove a plugin entry from `marketplace.plugins` | `--yes` |
+| `apm marketplace upstream add <repo> --alias <alias>` | Register an upstream marketplace (allow-list governance, immutable commit pinning, no re-hosting) | `--ref` (immutable; mutable refs auto-resolved), `--branch` (requires `--allow-head`), `--path`, `--host`, `--allow-head`, `--no-verify` |
+| `apm marketplace upstream list` | List registered upstream marketplaces | `-v` |
+| `apm marketplace upstream remove <alias>` | Remove an upstream (rejects when any package still references the alias) | |
 
 To build the marketplace, run `apm pack` (it reads `apm.yml` and writes `.claude-plugin/marketplace.json` whenever the `marketplace:` block is present). `apm init --marketplace` is the equivalent shortcut at project-creation time -- it seeds a fresh `apm.yml` with the `marketplace:` block already in place.
 
