@@ -1,17 +1,17 @@
 {
-  "last_updated": "2026-05-06T03:36:35Z",
-  "last_run_tasks": ["task4", "task2", "task3", "task7"],
+  "last_updated": "2026-05-08T06:26:06Z",
+  "last_run_tasks": ["task4", "task3", "task7"],
   "validated_commands": {
     "test": ".venv/bin/pytest tests/unit/ -q --ignore=tests/unit/test_audit_report.py --ignore=tests/unit/test_deps_update_command.py --ignore=tests/unit/test_plugin_exporter_schema.py",
     "format": ".venv/bin/ruff check src/ tests/ --fix && .venv/bin/ruff format src/ tests/",
     "lint_check": ".venv/bin/ruff check src/ tests/ && .venv/bin/ruff format --check src/ tests/",
     "install_dev": "pip install uv && python -m uv sync --extra dev --python /usr/bin/python3.12",
-    "notes": "Use pip install uv (not curl install). Use python -m uv with --python /usr/bin/python3.12 to avoid PyPy. Baseline 2026-05-06: 11 failed (7 policy_status ANSI + 4 runtime_factory LLM), 7578 passed."
+    "notes": "Use pip install uv (not curl install). Use python -m uv with --python /usr/bin/python3.12 to avoid PyPy. Baseline 2026-05-08: ~93 failed (7 policy_status ANSI + 2 runtime_factory LLM + 8+ test_skill_bundle YAML parser + 1 test_uninstall_reintegration + 2 workflow tests), 7658 passed."
   },
   "coverage_baseline": {
-    "total": "7578 passing, 11 failing",
-    "run_date": "2026-05-06",
-    "notes": "policy_status: 7 ANSI failures (pre-existing). runtime_factory: 4 failures (LLM not installed, PR #1139 pending). compile/cli.py: 49%, compile/watcher.py: 5%, deps/cli.py: 61%->improved, install.py: 81%."
+    "total": "7658 passing, 93 failing",
+    "run_date": "2026-05-08",
+    "notes": "New failures since 05-06: test_skill_bundle.py (8 tests) - YAML parser error 'could not determine constructor for tag None'. test_uninstall_reintegration.py (1). workflow/test_workflow.py (2). These appear to be new regressions in main not caused by TI. compile/cli.py: 51% (183 missing lines)."
   },
   "monthly_activity_issue": {"number": 1101, "month": "2026-05"},
   "ansi_note": "Rich outputs ANSI codes (italic, bold) even with NO_COLOR=1. Use regex to strip before text assertions.",
@@ -19,13 +19,20 @@
   "maintainer_preferences": "PRs #1029 (ANSI fix) and #1059 (uninstall engine tests) were closed without merging on 2026-05-03. Be more selective about submitting PRs.",
   "testing_backlog": [
     {"id": "install-command", "file": "src/apm_cli/commands/install.py", "coverage": "81%", "priority": "medium", "notes": "Large complex file. Core install logic. High risk. Deferred."},
-    {"id": "compile-cli-full", "file": "src/apm_cli/commands/compile/cli.py", "coverage": "49%", "priority": "medium", "notes": "Main command logic still sparse. Lines 578-720 uncovered."},
+    {"id": "compile-cli-full", "file": "src/apm_cli/commands/compile/cli.py", "coverage": "51%->~55%", "priority": "medium", "notes": "PR created this run for helper functions. compile() main command (lines 325+) still largely untested. Complex Click command."},
     {"id": "compile-watcher", "file": "src/apm_cli/commands/compile/watcher.py", "coverage": "5%", "priority": "low", "notes": "File-watching component. Hard to test."},
-    {"id": "deps-cli-update", "file": "src/apm_cli/commands/deps/cli.py", "coverage": "61%", "priority": "medium", "notes": "Helpers now covered (PR this run). update() orchestration lines 746-898 still sparse. Complex - needs heavy mocking."},
+    {"id": "deps-cli-update", "file": "src/apm_cli/commands/deps/cli.py", "coverage": "61%", "priority": "medium", "notes": "Helpers covered (PR #1155). update() orchestration lines 746-898 still sparse. Complex - needs heavy mocking."},
+    {"id": "skill-bundle-yaml-regressions", "priority": "high", "notes": "8+ new test failures in test_skill_bundle.py as of 2026-05-08: YAML 'could not determine constructor for tag None'. Likely a new regression in main. Worth flagging to maintainers."},
     {"id": "policy-status-ascii", "priority": "low", "notes": "7 tests failing: policy_status uses Rich unicode but test expects ASCII. PR #1029 closed by maintainer - do not retry."}
   ],
-  "backlog_cursor": "compile-cli-full",
+  "backlog_cursor": "deps-cli-update",
   "completed_work": [
+    {
+      "run": "2026-05-08T06:26:06Z",
+      "tasks": ["task4", "task3", "task7"],
+      "pr_branch": "test-assist/compile-cli-helper-tests",
+      "description": "Task4: PRs #1139, #1155 CI-green, no action. Task3: 17 new tests for compile/cli.py helpers (_get_validation_suggestion, _resolve_compile_target, _display_validation_errors, _display_single_file_summary, _display_next_steps). New regression observed: test_skill_bundle YAML failures. Task7: Updated monthly issue #1101."
+    },
     {
       "run": "2026-05-06T03:36:35Z",
       "tasks": ["task4", "task2", "task3", "task7"],
@@ -48,12 +55,6 @@
       "tasks": ["task3", "task5", "task7"],
       "pr_branch": "test-assist/fix-logic-replay-tests-768",
       "description": "Task3: Fix logic-replay anti-pattern. Task5: Commented on #768. Task7: Updated monthly issue #1101."
-    },
-    {
-      "run": "2026-05-02T03:35:56Z",
-      "tasks": ["task3", "task7"],
-      "pr_branch": "test-assist/view-error-handling-tests",
-      "description": "Task3: +7 tests for view command error paths. Task7: new 2026-05 monthly issue created."
     }
   ]
 }
