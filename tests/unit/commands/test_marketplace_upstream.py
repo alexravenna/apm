@@ -14,6 +14,15 @@ from apm_cli.commands.marketplace import marketplace
 SHA40 = "c" * 40
 
 
+@pytest.fixture(autouse=True)
+def _enable_upstream_flag(monkeypatch):
+    """Patch the experimental flag so upstream commands run in unit tests."""
+    monkeypatch.setattr(
+        "apm_cli.core.experimental.is_enabled",
+        lambda _flag_name: True,
+    )
+
+
 def _write_yml(tmp_path: Path, content: str | None = None) -> Path:
     if content is None:
         content = textwrap.dedent("""\
