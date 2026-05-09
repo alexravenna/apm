@@ -70,6 +70,15 @@ FLAGS: dict[str, ExperimentalFlag] = {
             "See https://microsoft.github.io/apm/integrations/copilot-cowork/"
         ),
     ),
+    "marketplace_upstreams": ExperimentalFlag(
+        name="marketplace_upstreams",
+        description="Enable curated upstream marketplace mirroring via 'apm marketplace upstream'.",
+        default=False,
+        hint=(
+            "Use 'apm marketplace upstream add <repo> --alias <alias> --ref <sha>' "
+            "to register an upstream. See https://microsoft.github.io/apm/guides/marketplace-upstreams/"
+        ),
+    ),
 }
 
 

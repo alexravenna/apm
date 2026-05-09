@@ -733,6 +733,15 @@ class MarketplaceBuilder:
         upstream_resolved: list[ResolvedUpstreamPackage] = []
         upstream_diagnostics: list[UpstreamResolverDiagnostic] = []
         if upstream_entries:
+            from apm_cli.core.experimental import is_enabled
+
+            if not is_enabled("marketplace_upstreams"):
+                raise BuildError(
+                    "apm.yml defines upstream packages but the 'marketplace-upstreams' "
+                    "experimental flag is not enabled.\n"
+                    "  Run: apm experimental enable marketplace-upstreams\n"
+                    "  See: https://microsoft.github.io/apm/guides/marketplace-upstreams/"
+                )
             resolver = self._build_upstream_resolver(yml)
             entries_only = [e for _, e in upstream_entries]
             upstream_resolved, upstream_diagnostics = resolver.resolve_all(entries_only)

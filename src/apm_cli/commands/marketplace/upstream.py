@@ -37,9 +37,21 @@ def _build_resolver(repo: str, host: str | None):
     return RefResolver(host=target_host, token=token)
 
 
-@click.group(help="Manage upstream marketplaces in authoring config")
+@click.group(help="[experimental] Manage upstream marketplaces in authoring config")
 def upstream():
     """Add, list, or remove upstream marketplaces in apm.yml."""
+
+
+def _require_upstreams_flag() -> None:
+    """Exit 2 with a clear message if the marketplace-upstreams flag is not enabled."""
+    from ...core.experimental import is_enabled
+
+    if not is_enabled("marketplace_upstreams"):
+        click.echo(
+            "[x] 'apm marketplace upstream' is experimental and not enabled.\n"
+            "    Run: apm experimental enable marketplace-upstreams"
+        )
+        sys.exit(2)
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +151,7 @@ def _resolve_upstream_ref_to_sha(
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed output")
 def add(repo, alias, ref, branch, path, host, allow_head, no_verify, verbose):
     """Add an upstream marketplace entry to authoring config."""
+    _require_upstreams_flag()
     logger = CommandLogger("marketplace-upstream-add", verbose=verbose)
     yml = _ensure_yml_exists(logger)
 
@@ -191,6 +204,7 @@ def add(repo, alias, ref, branch, path, host, allow_head, no_verify, verbose):
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed output")
 def list_cmd(verbose):
     """List upstream marketplaces."""
+    _require_upstreams_flag()
     logger = CommandLogger("marketplace-upstream-list", verbose=verbose)
     yml = _ensure_yml_exists(logger)
     entries = list_upstream_entries(Path(yml))
@@ -225,6 +239,7 @@ def list_cmd(verbose):
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed output")
 def remove(alias, yes, verbose):
     """Remove an upstream marketplace from authoring config."""
+    _require_upstreams_flag()
     logger = CommandLogger("marketplace-upstream-remove", verbose=verbose)
     yml = _ensure_yml_exists(logger)
     # Validate the alias exists before prompting -- unknown alias always

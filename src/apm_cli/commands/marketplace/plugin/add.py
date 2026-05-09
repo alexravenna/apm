@@ -97,6 +97,15 @@ def add(
     parsed_tags = _parse_tags(tags)
 
     if upstream:
+        from ....core.experimental import is_enabled
+
+        if not is_enabled("marketplace_upstreams"):
+            logger.error(
+                "'apm marketplace package add --upstream' is experimental and not enabled.\n"
+                "    Run: apm experimental enable marketplace-upstreams",
+                symbol="error",
+            )
+            sys.exit(2)
         try:
             resolved_name = add_upstream_package_entry(
                 yml,
