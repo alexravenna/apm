@@ -9,9 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `apm update` command refreshes APM dependencies in the current project: resolves `apm.yml` against the latest refs, prints a structured plan (added/updated/removed/unchanged), and prompts before mutating anything (default `[y/N]`). `--yes` skips the prompt; `--dry-run` previews without changes. Closes the lockfile-UX gap reported in #1203. (#1203)
+- `apm install --frozen` performs a CI-safe, read-only install that fails fast (exit 1) when `apm.lock.yaml` is missing or any direct dependency in `apm.yml` is absent from the lockfile. Mutually exclusive with `--update`. Mirrors `npm ci` / `uv sync --frozen`. (#1203)
+- `apm install` now emits a one-line `Run 'apm update' to check for newer versions.` hint when re-run against an existing lockfile in plain mode (no `--update`/`--frozen`/`--force`/partial packages), pointing users at the verb that actually checks for newer refs. (#1203)
 - Virtual subdirectory and raw-file packages now resolve from self-hosted Git services (Gitea, Gogs) via raw URL with API v1/v3 fallback. (#587)
 - `shared/apm.md` gh-aw shared workflow exposes a `target:` import input (default `all`) so consumer workflows can ship slim, single-harness bundles instead of always packing every layout. (#1184)
 - If you use the `gh` CLI, APM is now zero-config for private GitHub packages on github.com, `*.ghe.com`, and GHES: APM uses your active `gh auth login` token (`gh auth token --hostname <host>`) before falling back to `git credential fill`. Silently skipped when `gh` is not installed or not logged in for the host. (#630)
+
+### Changed
+
+- The CLI self-updater moved from `apm update` to `apm self-update` so the bare `apm update` verb now refreshes project dependencies (matching `npm update`, `uv lock --upgrade`, `cargo update`). For one release, running `apm update` outside an `apm.yml` project still forwards to `apm self-update` with a deprecation banner; the alias will be removed in the next minor version. (#1203)
+- `apm install --force` help text now states explicitly that the flag does NOT refresh refs; users who want newer commits should run `apm update`. (#1203)
 
 ### Fixed
 

@@ -165,12 +165,19 @@ def test_install_py_under_legacy_budget():
     v0.12.4 (orphan-cleanup gate) raised 1840 -> 1855 to add the
     ``_has_orphan_deps_in_lock`` short-circuit so emptying apm.yml
     actually removes deployed files (regression dating back to #1116).
+
+    Issue #1203 (lockfile UX P0) raised 1855 -> 1915 to land the
+    ``--frozen`` flag, plan-callback plumbing, FrozenInstallError
+    exception handlers, and the no-op "Run 'apm update'" nudge required
+    by the new ``apm update`` command and CI-safe install flow. All
+    additions are entry-point glue at the Click handler boundary; the
+    actual logic lives in ``apm_cli/install/`` (plan, errors, service).
     """
     install_py = Path(__file__).resolve().parents[3] / "src" / "apm_cli" / "commands" / "install.py"
     assert install_py.is_file()
     n = _line_count(install_py)
-    assert n <= 1855, (
-        f"commands/install.py grew to {n} LOC (budget 1855). "
+    assert n <= 1915, (
+        f"commands/install.py grew to {n} LOC (budget 1915). "
         "Do NOT trim cosmetically -- engage the python-architecture skill "
         "(.github/skills/python-architecture/SKILL.md) and propose an "
         "extraction into apm_cli/install/."

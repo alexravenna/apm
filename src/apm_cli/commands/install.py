@@ -11,7 +11,12 @@ from typing import Any, List, Optional  # noqa: F401, UP035
 
 import click
 
-from apm_cli.install.errors import AuthenticationError, DirectDependencyError, PolicyViolationError
+from apm_cli.install.errors import (
+    AuthenticationError,
+    DirectDependencyError,
+    FrozenInstallError,
+    PolicyViolationError,
+)
 
 # Re-export the pre-deploy security scan so that bare-name call sites inside
 # this module and ``tests/unit/test_install_scanning.py``'s direct import
@@ -203,6 +208,8 @@ class InstallContext:
     manifest_snapshot: bytes | None = None
     snapshot_manifest_path: Optional["Path"] = None
     legacy_skill_paths: bool = False
+    frozen: bool = False
+    plan_callback: Any = None  # Callable[[UpdatePlan], bool] | None
 
 
 # ---------------------------------------------------------------------------
@@ -808,12 +815,21 @@ def _handle_mcp_install(
     type=click.Choice(["apm", "mcp"]),
     help="Install only specific dependency type",
 )
-@click.option("--update", is_flag=True, help="Update dependencies to latest Git references")
+@click.option(
+    "--update",
+    is_flag=True,
+    help="Update dependencies to latest Git references (consider 'apm update' for an interactive plan)",
+)
 @click.option("--dry-run", is_flag=True, help="Show what would be installed without installing")
 @click.option(
     "--force",
     is_flag=True,
-    help="Overwrite locally-authored files on collision and deploy despite critical security findings",
+    help="Overwrite locally-authored files on collision and deploy despite critical security findings (does NOT refresh refs; use 'apm update' for that)",
+)
+@click.option(
+    "--frozen",
+    is_flag=True,
+    help="Refuse to install when apm.lock.yaml is missing or out of sync with apm.yml (CI-safe; mutually exclusive with --update)",
 )
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed installation information")
 @click.option(
@@ -990,6 +1006,7 @@ def install(  # noqa: PLR0913
     update,
     dry_run,
     force,
+    frozen,
     verbose,
     trust_transitive_mcp,
     parallel_downloads,
@@ -1051,6 +1068,16 @@ def install(  # noqa: PLR0913
     install_started_at = time.perf_counter()
     summary_rendered = False
     logger = None
+    # Capture lockfile presence BEFORE install for the "Run 'apm update'"
+    # nudge. If the user re-runs `apm install` against an existing
+    # lockfile in non-update / non-frozen mode, we hint at the verb that
+    # actually checks for newer refs (#1203).
+    lockfile_pre_existed = (Path.cwd() / "apm.lock.yaml").exists()
+    if frozen and update:
+        raise click.UsageError(
+            "--frozen and --update are mutually exclusive. "
+            "Use 'apm update' to refresh refs, then 'apm install --frozen' in CI."
+        )
     try:
         # Create structured logger for install output early so exception
         # handlers can always reference it (avoids UnboundLocalError if
@@ -1378,6 +1405,8 @@ def install(  # noqa: PLR0913
             manifest_snapshot=_manifest_snapshot,
             snapshot_manifest_path=_snapshot_manifest_path,
             legacy_skill_paths=legacy_skill_paths,
+            frozen=frozen,
+            plan_callback=None,
         )
 
         apm_count, mcp_count, apm_diagnostics = _install_apm_packages(
@@ -1395,6 +1424,13 @@ def install(  # noqa: PLR0913
         )
         summary_rendered = True
 
+        # No-op nudge: lockfile already existed and the user re-ran a
+        # plain `apm install` (no --update / --frozen / --force / partial
+        # packages). Point them at the verb that actually checks for
+        # newer refs. See issue #1203.
+        if lockfile_pre_existed and not update and not frozen and not force and not packages:
+            _rich_info("Run 'apm update' to check for newer versions.")
+
     except InsecureDependencyPolicyError:
         _maybe_rollback_manifest(_snapshot_manifest_path, _manifest_snapshot, logger)
         sys.exit(1)
@@ -1407,6 +1443,17 @@ def install(  # noqa: PLR0913
     except DirectDependencyError as e:
         _maybe_rollback_manifest(_snapshot_manifest_path, _manifest_snapshot, logger)
         logger.error(str(e))
+        sys.exit(1)
+    except FrozenInstallError as e:
+        _maybe_rollback_manifest(_snapshot_manifest_path, _manifest_snapshot, logger)
+        if logger is not None:
+            logger.error(str(e))
+            for reason in e.reasons:
+                _rich_echo(reason)
+        else:
+            _rich_error(str(e))
+            for reason in e.reasons:
+                _rich_echo(reason)
         sys.exit(1)
     except click.UsageError:
         # Conflict matrix / argv parser raises UsageError -- let Click
@@ -1594,6 +1641,8 @@ def _install_apm_packages(ctx, outcome):
                 allow_protocol_fallback=ctx.allow_protocol_fallback,
                 no_policy=ctx.no_policy,
                 legacy_skill_paths=ctx.legacy_skill_paths,
+                frozen=getattr(ctx, "frozen", False),
+                plan_callback=getattr(ctx, "plan_callback", None),
             )
             apm_count = install_result.installed_count
             prompt_count = install_result.prompts_integrated  # noqa: F841
@@ -1608,6 +1657,12 @@ def _install_apm_packages(ctx, outcome):
             _rich_error(str(e))
             if e.diagnostic_context:
                 _rich_echo(e.diagnostic_context)
+            sys.exit(1)
+        except FrozenInstallError as e:
+            _maybe_rollback_manifest(ctx.snapshot_manifest_path, ctx.manifest_snapshot, logger)
+            logger.error(str(e))
+            for reason in e.reasons:
+                _rich_echo(reason)
             sys.exit(1)
         except Exception as e:
             _maybe_rollback_manifest(ctx.snapshot_manifest_path, ctx.manifest_snapshot, logger)
@@ -1813,6 +1868,8 @@ def _install_apm_dependencies(  # noqa: PLR0913
     skill_subset: "builtins.tuple | None" = None,
     skill_subset_from_cli: bool = False,
     legacy_skill_paths: bool = False,
+    frozen: bool = False,
+    plan_callback=None,
 ):
     """Thin wrapper -- builds an :class:`InstallRequest` and delegates to
     :class:`apm_cli.install.service.InstallService`.
@@ -1848,5 +1905,7 @@ def _install_apm_dependencies(  # noqa: PLR0913
         skill_subset=skill_subset,
         skill_subset_from_cli=skill_subset_from_cli,
         legacy_skill_paths=legacy_skill_paths,
+        frozen=frozen,
+        plan_callback=plan_callback,
     )
     return InstallService().run(request)
