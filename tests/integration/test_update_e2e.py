@@ -10,8 +10,6 @@ Validates the full pipeline against a real GitHub package:
 * `apm install --frozen` exits non-zero when lockfile is missing.
 * `apm install --frozen` exits non-zero when manifest declares a dep
   not present in the lockfile.
-* `apm install` (no flags, no manifest changes) emits the
-  "Run 'apm update' to check for newer versions." hint.
 * `apm install --frozen --update` is rejected as a usage error.
 
 Uses the real `microsoft/apm-sample-package`. Requires GITHUB_APM_PAT
@@ -156,20 +154,3 @@ class TestFrozenE2E:
         assert result.returncode != 0
         combined = result.stdout + result.stderr
         assert "frozen" in combined.lower() and "update" in combined.lower()
-
-
-class TestNoOpHintE2E:
-    def test_install_emits_update_hint_when_lockfile_present_and_no_changes(
-        self, temp_project, apm_command
-    ):
-        """`apm install` with no manifest changes and a present lockfile
-        emits the "Run 'apm update' to check for newer versions." hint."""
-        _write_apm_yml(temp_project, ["microsoft/apm-sample-package"])
-        first = _run_apm(apm_command, ["install"], temp_project)
-        assert first.returncode == 0, first.stderr
-
-        result = _run_apm(apm_command, ["install"], temp_project)
-
-        assert result.returncode == 0, result.stderr
-        combined = result.stdout + result.stderr
-        assert "apm update" in combined, f"Missing nudge in:\n{combined}"

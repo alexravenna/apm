@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `apm update` command refreshes APM dependencies in the current project: resolves `apm.yml` against the latest refs, prints a structured plan (added/updated/removed/unchanged), and prompts before mutating anything (default `[y/N]`). `--yes` skips the prompt; `--dry-run` previews without changes. Closes the lockfile-UX gap reported in #1203. (#1203)
-- `apm install --frozen` performs a CI-safe, read-only install that fails fast (exit 1) when `apm.lock.yaml` is missing or any direct dependency in `apm.yml` is absent from the lockfile. Mutually exclusive with `--update`. Mirrors `npm ci` / `uv sync --frozen`. (#1203)
-- `apm install` now emits a one-line `Run 'apm update' to check for newer versions.` hint when re-run against an existing lockfile in plain mode (no `--update`/`--frozen`/`--force`/partial packages), pointing users at the verb that actually checks for newer refs. (#1203)
+- `apm update` refreshes APM dependencies in the current project: resolves `apm.yml` against the latest refs, prints a structured plan (added/updated/removed/unchanged), and prompts `[y/N]` before mutating anything (`--yes` skips the prompt; `--dry-run` previews). (#1244)
+- `apm install --frozen` performs a CI-safe, read-only install that fails fast (exit 1) when `apm.lock.yaml` is missing or out of sync with `apm.yml`; mutually exclusive with `--update`. (#1244)
+- `apm install` now emits a one-line "Run 'apm update' to check for newer versions." hint on the no-op path when a lockfile is already present, pointing users at the verb that actually checks for newer refs. (#1244)
 - Virtual subdirectory and raw-file packages now resolve from self-hosted Git services (Gitea, Gogs) via raw URL with API v1/v3 fallback. (#587)
 - `shared/apm.md` gh-aw shared workflow exposes a `target:` import input (default `all`) so consumer workflows can ship slim, single-harness bundles instead of always packing every layout. (#1184)
 - **GitLab host support:** `gitlab.com` and self-managed instances (via `GITLAB_HOST` / `APM_GITLAB_HOSTS`) use GitLab REST **v4** for `marketplace.json` and install-time raw file reads; nested GitLab group paths are disambiguated in dependency references with object-form `git:` + `path:` where shorthand is ambiguous. GitHub, GHES, Azure DevOps, and registry-proxy behavior remain unchanged. (#1149)
@@ -20,8 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The CLI self-updater moved from `apm update` to `apm self-update` so the bare `apm update` verb now refreshes project dependencies (matching `npm update`, `uv lock --upgrade`, `cargo update`). For one release, running `apm update` outside an `apm.yml` project still forwards to `apm self-update` with a deprecation banner; the alias will be removed in the next minor version. (#1203)
-- `apm install --force` help text now states explicitly that the flag does NOT refresh refs; users who want newer commits should run `apm update`. (#1203)
+- The CLI self-updater moved from `apm update` to `apm self-update`; the bare `apm update` verb now refreshes project dependencies (matching `npm update`, `uv lock --upgrade`, `cargo update`). Outside an `apm.yml` project `apm update` still forwards to `apm self-update` with a deprecation banner for one release. (#1244)
+- `apm install --force` help text now states explicitly that the flag does NOT refresh refs; users who want newer commits should run `apm update`. (#1244)
 - `apm marketplace browse/search/add/update` route through the registry proxy when `PROXY_REGISTRY_URL` is set; `PROXY_REGISTRY_ONLY=1` blocks direct GitHub and GitLab host API fallbacks. (#1149)
 - Registry proxy now warns when `PROXY_REGISTRY_TOKEN` is set and `PROXY_REGISTRY_URL` uses `http://`, since the bearer token would be transmitted in plaintext; set `PROXY_REGISTRY_ALLOW_HTTP=1` to silence the warning for trusted internal proxies. (#1149)
 

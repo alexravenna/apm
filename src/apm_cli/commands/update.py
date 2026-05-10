@@ -4,9 +4,9 @@ This is the package-manager convention popularised by ``cargo update``,
 ``poetry update``, ``bundle update``, and ``npm update`` -- the verb is
 about the dependency graph, not about updating the CLI binary itself.
 The CLI self-updater lives at ``apm self-update`` (see
-:mod:`apm_cli.commands.self_update`); a back-compat shim in
-:mod:`apm_cli.cli` keeps ``apm update`` (no ``apm.yml``) working as a
-deprecated alias for one release.
+:mod:`apm_cli.commands.self_update`); when this command runs outside an
+``apm.yml`` project it forwards to the self-updater as a deprecated
+back-compat shim for one release (see ``update()`` below).
 
 What it does
 ------------
@@ -50,11 +50,15 @@ from ..install.errors import (
     PolicyViolationError,
 )
 from ..install.plan import UpdatePlan, render_plan_text
-from ..utils.console import _rich_echo, _rich_error, _rich_info, _rich_success
+from ..utils.console import _rich_echo, _rich_error, _rich_info, _rich_success, _rich_warning
 
 
 def _has_apm_yml(start: Path | None = None) -> bool:
-    """Return True if an ``apm.yml`` is reachable from ``start`` (or cwd)."""
+    """Return True when an ``apm.yml`` is present in ``start`` (or cwd).
+
+    No parent traversal: matches the resolution scope of ``apm install``,
+    which only honours an ``apm.yml`` in the working directory.
+    """
     cwd = start or Path.cwd()
     return (cwd / "apm.yml").is_file()
 
@@ -97,8 +101,22 @@ def _stdin_is_tty() -> bool:
     default=False,
     help="Show unchanged deps and detailed pipeline diagnostics",
 )
+@click.option(
+    "--check",
+    "check_only",
+    is_flag=True,
+    default=False,
+    help="(Deprecated) Forwarded to 'apm self-update --check' when run outside an apm.yml project; rejected inside a project.",
+    hidden=True,
+)
 @click.pass_context
-def update(ctx: click.Context, assume_yes: bool, dry_run: bool, verbose: bool) -> None:
+def update(
+    ctx: click.Context,
+    assume_yes: bool,
+    dry_run: bool,
+    verbose: bool,
+    check_only: bool,
+) -> None:
     """Refresh APM dependencies to the latest matching refs.
 
     Examples:
@@ -114,12 +132,21 @@ def update(ctx: click.Context, assume_yes: bool, dry_run: bool, verbose: bool) -
         # the release after this one.
         from apm_cli.commands.self_update import self_update as _self_update_cmd
 
-        _rich_info(
-            "[!] 'apm update' refreshes APM dependencies. To update the CLI binary, "
-            "use 'apm self-update'. Forwarding for back-compat (deprecated)."
+        _rich_warning(
+            "'apm update' refreshes APM dependencies. To update the CLI binary, "
+            "use 'apm self-update'. Forwarding for back-compat (deprecated).",
+            symbol="warning",
         )
-        ctx.invoke(_self_update_cmd, check=False)
+        ctx.invoke(_self_update_cmd, check=check_only)
         return
+
+    if check_only:
+        raise click.UsageError(
+            "'apm update --check' is reserved for the deprecated self-update shim "
+            "and only works outside an apm.yml project. Inside a project, use "
+            "'apm update --dry-run' to preview dependency changes, or "
+            "'apm self-update --check' to check for a new CLI binary."
+        )
 
     _run_dep_update(assume_yes=assume_yes, dry_run=dry_run, verbose=verbose)
 

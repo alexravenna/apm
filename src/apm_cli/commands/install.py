@@ -1093,11 +1093,6 @@ def install(  # noqa: PLR0913
     install_started_at = time.perf_counter()
     summary_rendered = False
     logger = None
-    # Capture lockfile presence BEFORE install for the "Run 'apm update'"
-    # nudge. If the user re-runs `apm install` against an existing
-    # lockfile in non-update / non-frozen mode, we hint at the verb that
-    # actually checks for newer refs (#1203).
-    lockfile_pre_existed = (Path.cwd() / "apm.lock.yaml").exists()
     if frozen and update:
         raise click.UsageError(
             "--frozen and --update are mutually exclusive. "
@@ -1446,13 +1441,6 @@ def install(  # noqa: PLR0913
             elapsed_seconds=time.perf_counter() - install_started_at,
         )
         summary_rendered = True
-
-        # No-op nudge: lockfile already existed and the user re-ran a
-        # plain `apm install` (no --update / --frozen / --force / partial
-        # packages). Point them at the verb that actually checks for
-        # newer refs. See issue #1203.
-        if lockfile_pre_existed and not update and not frozen and not force and not packages:
-            _rich_info("Run 'apm update' to check for newer versions.")
 
     except InsecureDependencyPolicyError:
         _maybe_rollback_manifest(_snapshot_manifest_path, _manifest_snapshot, logger)
