@@ -270,7 +270,7 @@ class TestInstallLogger:
         assert mock_info.called, "nudge line was not emitted"
         nudge_msg = mock_info.call_args[0][0]
         assert "apm update" in nudge_msg
-        assert "newer versions" in nudge_msg
+        assert "latest refs" in nudge_msg
 
     @patch("apm_cli.core.command_logger._rich_info")
     @patch("apm_cli.core.command_logger._rich_success")
