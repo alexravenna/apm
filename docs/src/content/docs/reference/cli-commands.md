@@ -95,8 +95,9 @@ apm install [PACKAGES...] [OPTIONS]
   - `windsurf` - Windsurf/Cascade (`.windsurf/rules/`, `.windsurf/skills/`, `.windsurf/workflows/`, `.windsurf/hooks.json`)
   - `copilot-cowork` - Microsoft 365 Copilot Cowork skills (user scope only, requires `copilot-cowork` experimental flag). Not included in `all`; must be specified explicitly with `--target copilot-cowork --global`.
   - `vscode`, `agents` - Deprecated aliases for `copilot` (`.github/`). Still accepted by the parser; prefer `copilot` for GitHub Copilot deployment, or `agent-skills` for cross-client `.agents/skills/` deployment. Removal in v1.0.
-- `--update` - Update dependencies to latest Git references  
-- `--force` - Overwrite locally-authored files on collision; bypass security scan blocks
+- `--update` - Update dependencies to latest Git references (deprecated; prefer `apm update`)
+- `--frozen` - CI-safe install that exits 1 if `apm.lock.yaml` is missing or any direct `apm.yml` dependency is absent from the lockfile. Structural presence check only -- does not verify file integrity on disk (use `apm audit` for that). Mutually exclusive with `--update`.
+- `--force` - Overwrite locally-authored files on collision; bypass security scan blocks. Does NOT refresh refs (use `apm update` for that).
 - `--dry-run` - Show what would be installed without installing
 - `--parallel-downloads INTEGER` - Max concurrent package downloads (default: 4, 0 to disable)
 - `--verbose` - Show individual file paths and full error details in the diagnostic summary
@@ -183,6 +184,7 @@ Exceptions:
 - APM packages removed from `apm.yml` have their deployed files cleaned up on the next full `apm install`
 - APM packages whose ref/version changed in `apm.yml` are re-downloaded automatically (no `--update` needed)
 - `--force` remains available for full overwrite/reset scenarios
+- When the lockfile already satisfies the manifest and no flags were passed, `apm install` prints an info line: `Run 'apm update' to check for newer versions.`
 
 **Stale-file cleanup:**
 
@@ -790,12 +792,48 @@ apm unpack bundle.tar.gz --force
 - Verification checks that all `deployed_files` from the bundle lockfile are present in the bundle
 - The bundle's `apm.lock.yaml` is metadata only — it is **not** copied to the output directory
 
-### `apm update` - Update APM to the latest version
+### `apm update` - Refresh project dependencies
+
+Resolve `apm.yml` dependencies against their latest Git refs, show a structured plan, and prompt for consent before writing anything. The npm/pip/cargo equivalent of `npm update` or `uv lock --upgrade`.
+
+```bash
+apm update [OPTIONS]
+```
+
+**Options:**
+- `--yes` - Accept the update plan without prompting (non-interactive / CI use)
+- `--dry-run` - Print the plan without prompting or mutating anything
+- `--verbose` - Show full resolver details
+
+**Examples:**
+```bash
+# Preview what would change (no prompt, no mutation)
+apm update --dry-run
+
+# Interactively review and accept or decline the update plan
+apm update
+
+# Apply updates without prompting (CI)
+apm update --yes
+```
+
+**Behavior:**
+- Resolves all `apm.yml` deps (including `latest` and branch refs) against their current remote state
+- Prints a structured plan grouped into: added / updated / removed / unchanged
+- Prompts `[y/N]` (default: N) before touching the lockfile or filesystem
+- Declining at the prompt leaves `apm.lock.yaml` and all deployed files untouched
+- `--dry-run` implies no prompt and no mutation regardless of `--yes`
+
+> **Note:** `apm update` in a directory without `apm.yml` forwards to `apm self-update`
+> with a one-line deprecation banner. This back-compat shim will be removed in the
+> next minor release -- use `apm self-update` explicitly to update the CLI.
+
+### `apm self-update` - Update the APM CLI itself
 
 Update the APM CLI to the latest version available on GitHub releases.
 
 ```bash
-apm update [OPTIONS]
+apm self-update [OPTIONS]
 ```
 
 **Options:**
@@ -803,29 +841,29 @@ apm update [OPTIONS]
 
 **Examples:**
 ```bash
-# Check if an update is available
-apm update --check
+# Check if a CLI update is available
+apm self-update --check
 
-# Update to the latest version
-apm update
+# Update the CLI to the latest version
+apm self-update
 ```
 
 **Behavior:**
-- Fetches latest release from GitHub
-- Compares with current installed version
+- Fetches the latest release from GitHub
+- Compares with the current installed version
 - Downloads and runs the official platform installer (`install.sh` on macOS/Linux, `install.ps1` on Windows)
 - Preserves existing configuration and projects
 - Shows progress and success/failure status
-- Some package-manager distributions can disable self-update at build time. 
-  In those builds, `apm update` prints a distributor-defined guidance message
+- Some package-manager distributions can disable self-update at build time.
+  In those builds, `apm self-update` prints a distributor-defined guidance message
   (for example, a `brew upgrade` command) and exits without running the installer.
 
 **Version Checking:**
-APM automatically checks for updates (at most once per day) when running any command. If a newer version is available, you'll see a yellow warning:
+APM automatically checks for a newer CLI version (at most once per day) when running any command. If a newer version is available, you'll see a warning:
 
 ```
-⚠️  A new version of APM is available: 0.7.0 (current: 0.6.3)
-Run apm update to upgrade
+[!] A new version of APM is available: 0.7.0 (current: 0.6.3)
+Run apm self-update to upgrade
 ```
 
 This check is non-blocking and cached to avoid slowing down the CLI.
