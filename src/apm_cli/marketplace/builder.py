@@ -265,7 +265,15 @@ class _UpstreamResolverFactory:
 
     # -- ref resolution ---------------------------------------------------------
 
-    def ref_to_sha(self, host: str, owner: str, repo: str, ref_or_branch: str) -> str:
+    def ref_to_sha(
+        self,
+        host: str,
+        owner: str,
+        repo: str,
+        ref_or_branch: str,
+        *,
+        allow_head: bool = False,
+    ) -> str:
         # SHA short-circuit -- offline-safe, no network.
         if _SHA40_RE.match(ref_or_branch):
             return ref_or_branch
@@ -284,16 +292,65 @@ class _UpstreamResolverFactory:
             if remote.name == f"refs/tags/{ref_or_branch}":
                 return remote.sha
             if remote.name == f"refs/heads/{ref_or_branch}":
-                # B1: branch refs are mutable. Reject unless allow_head is
-                # enabled at the build level; callers that need to track HEAD
-                # explicitly set BuildOptions.allow_head=True.
-                if not self._builder._options.allow_head:
+                # Branch refs are mutable. Reject unless either the overall
+                # build allows HEAD-tracking (direct-package flow) or the
+                # upstream registration explicitly opted in.
+                if not (self._builder._options.allow_head or allow_head):
                     raise BuildError(
                         f"ref '{ref_or_branch}' resolves to a mutable branch HEAD; "
                         f"set allow_head: true or pin a SHA/tag for reproducible builds."
                     )
                 return remote.sha
         raise BuildError(f"ref '{ref_or_branch}' not found in {owner}/{repo}")
+
+    def canonical_full_name(self, host: str, owner: str, repo: str) -> str:
+        import requests
+
+        from apm_cli.core.auth import AuthResolver
+
+        if self._builder._options.offline:
+            return ""
+
+        auth_resolver = self._builder._auth_resolver
+        if auth_resolver is None:
+            auth_resolver = AuthResolver()
+            self._builder._auth_resolver = auth_resolver
+
+        host_info = AuthResolver.classify_host(host)
+        if host_info.kind not in ("github", "ghe_cloud", "ghes"):
+            return ""
+
+        url = f"{host_info.api_base}/repos/{owner}/{repo}"
+
+        def _do_fetch(token: str | None, _git_env: dict[str, str]) -> str:
+            headers = {
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "apm-cli (upstream-resolver)",
+            }
+            if token:
+                headers["Authorization"] = f"token {token}"
+            resp = requests.get(
+                url,
+                headers=headers,
+                timeout=self._builder._options.timeout_seconds,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            full_name = payload.get("full_name")
+            if not isinstance(full_name, str) or not full_name:
+                raise RuntimeError("repo metadata missing full_name")
+            return full_name
+
+        try:
+            return auth_resolver.try_with_fallback(
+                host,
+                _do_fetch,
+                org=owner,
+                unauth_first=True,
+            )
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else "?"
+            raise RuntimeError(f"HTTP {status}") from None
 
     # -- version-range resolution ----------------------------------------------
 
@@ -342,18 +399,11 @@ class _UpstreamResolverFactory:
 
     def build(self) -> UpstreamResolver:
         upstreams_by_alias = {u.alias: u for u in self._yml.upstreams}
-        # ``canonical_full_name`` is intentionally ``None`` in v1.
-        # The rename-guard (checking that the fetched repo full_name still
-        # matches the lockfile's recorded name) requires a GitHub Contents API
-        # call for which no existing v1 helper exists. The lockfile already
-        # records the field for forward-compatibility; the guard fires in v2
-        # once the helper is wired. This deferral is documented in the trust
-        # table in docs/guides/marketplace-upstreams.md.
         return UpstreamResolver(
             upstreams=upstreams_by_alias,
             cache=UpstreamCache(),
             ref_to_sha=self.ref_to_sha,
-            canonical_full_name=None,
+            canonical_full_name=self.canonical_full_name,
             version_range_resolver=self.version_range,
             auth_resolver=self._builder._auth_resolver,
             offline=self._builder._options.offline,

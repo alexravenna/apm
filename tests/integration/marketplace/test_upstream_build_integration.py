@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from apm_cli.marketplace.builder import BuildOptions, MarketplaceBuilder
@@ -31,6 +32,16 @@ from apm_cli.marketplace.upstream_cache import UpstreamCache, UpstreamCacheKey, 
 _SHA_MANIFEST = "a" * 40
 _SHA_PLUGIN = "b" * 40
 _SHA_DIRECT = "c" * 40
+
+
+@pytest.fixture(autouse=True)
+def _enable_upstream_flag(monkeypatch):
+    """Patch the experimental flag so upstream paths execute in tests."""
+    monkeypatch.setattr(
+        "apm_cli.core.experimental.is_enabled",
+        lambda _flag_name: True,
+    )
+
 
 _UPSTREAM_MANIFEST: dict = {
     "name": "fixture-upstream",
@@ -115,6 +126,7 @@ def _make_builder(yml_path: Path, cache_dir: Path, *, offline: bool = False) -> 
             base_dir=cache_dir,
             fetch_callback=lambda k, a: upstream_manifest,
         )
+        resolver._canonical_full_name = lambda host, owner, repo: f"{owner}/{repo}"
         return resolver
 
     builder._build_upstream_resolver = _patched_build_resolver

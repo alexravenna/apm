@@ -157,9 +157,11 @@ class ResolvedUpstreamPackage:
 # Callable types for dependency injection
 # ---------------------------------------------------------------------------
 
-# (host, owner, repo, ref-or-branch) -> 40-char SHA. Used to collapse
-# branches/tags to immutable SHAs before they reach the cache key.
-RefToShaResolver = Callable[[str, str, str, str], str]
+# (host, owner, repo, ref-or-branch, *, allow_head=False) -> 40-char SHA.
+# Used to collapse branches/tags to immutable SHAs before they reach the
+# cache key. ``allow_head`` is only used for upstream registrations that
+# explicitly opt in to tracking branch HEAD.
+RefToShaResolver = Callable[..., str]
 
 # (host, owner, repo) -> canonical "owner/repo" as reported by the
 # git host's API. Empty string means "unknown -- skip rename check".
@@ -398,7 +400,13 @@ class UpstreamResolver:
 
         try:
             manifest_sha = self._normalise_to_sha(
-                self._ref_to_sha(upstream.host, owner, repo, target_ref)
+                self._ref_to_sha(
+                    upstream.host,
+                    owner,
+                    repo,
+                    target_ref,
+                    allow_head=upstream.allow_head,
+                )
             )
         except UpstreamResolutionError:
             raise

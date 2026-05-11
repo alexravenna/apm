@@ -114,7 +114,14 @@ def manifest_with_pinned_plugin(*, plugin_sha: str = SHA_PLUGIN) -> dict:
 def ref_to_sha_static(value: str) -> RefToSha:
     """Return a ref_to_sha callable that always returns *value*."""
 
-    def _resolver(host: str, owner: str, repo: str, ref: str) -> str:
+    def _resolver(
+        host: str,
+        owner: str,
+        repo: str,
+        ref: str,
+        *,
+        allow_head: bool = False,
+    ) -> str:
         return value
 
     return _resolver
@@ -187,7 +194,11 @@ class TestAtomicFetch:
         resolver = UpstreamResolver(
             upstreams=upstreams,
             cache=cache,
-            ref_to_sha=lambda host, owner, repo, ref: SHA_A if repo == "GitNexus" else SHA_B,
+            ref_to_sha=(
+                lambda host, owner, repo, ref, *, allow_head=False: (
+                    SHA_A if repo == "GitNexus" else SHA_B
+                )
+            ),
         )
         entries = [
             make_entry(name="acme-gitnexus", upstream_alias="gitnexus", plugin="gitnexus"),

@@ -76,6 +76,39 @@ class _MockRefResolver:
         pass
 
 
+class _FakeAuthResolver:
+    """Minimal AuthResolver stand-in for factory HTTP lookups."""
+
+    def try_with_fallback(
+        self,
+        host: str,
+        operation,
+        *,
+        org: str | None = None,
+        port: int | None = None,
+        path: str | None = None,
+        unauth_first: bool = False,
+        verbose_callback=None,
+    ):
+        return operation(None, {})
+
+
+class _FakeResponse:
+    """Small requests.Response stand-in for canonical-name lookups."""
+
+    def __init__(self, payload: dict[str, object], status_code: int = 200) -> None:
+        self._payload = payload
+        self.status_code = status_code
+        self.response = self
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def json(self) -> dict[str, object]:
+        return self._payload
+
+
 def _gitnexus_manifest() -> dict:
     """Minimal upstream marketplace.json modelled on GitNexus."""
     return {
@@ -120,7 +153,14 @@ def _patch_resolver_factory(
     def _factory(yml):  # type: ignore[no-untyped-def]
         upstreams_by_alias = {u.alias: u for u in yml.upstreams}
 
-        def _ref_to_sha(host: str, owner: str, repo: str, ref: str) -> str:
+        def _ref_to_sha(
+            host: str,
+            owner: str,
+            repo: str,
+            ref: str,
+            *,
+            allow_head: bool = False,
+        ) -> str:
             return ref_to_sha_value
 
         return UpstreamResolver(
@@ -161,6 +201,82 @@ marketplace:
         - acme
         - approved
 """
+
+
+_UPSTREAM_ONLY_YML = """\
+name: acme-marketplace
+description: ACME curated marketplace
+version: 0.1.0
+marketplace:
+  owner:
+    name: ACME Corp
+  upstreams:
+    - alias: gitnexus
+      repo: abhigyanpatwari/GitNexus
+      ref: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  packages:
+    - name: acme-gitnexus
+      upstream: gitnexus
+      plugin: gitnexus
+"""
+
+
+_UPSTREAM_ALLOW_HEAD_YML = """\
+name: acme-marketplace
+description: ACME curated marketplace
+version: 0.1.0
+marketplace:
+  owner:
+    name: ACME Corp
+  upstreams:
+    - alias: gitnexus
+      repo: abhigyanpatwari/GitNexus
+      branch: main
+      allow_head: true
+  packages:
+    - name: acme-gitnexus
+      upstream: gitnexus
+      plugin: gitnexus
+"""
+
+
+def test_real_factory_fails_closed_on_repo_rename(tmp_path: Path, monkeypatch) -> None:
+    """The real factory must wire the canonical-name guard into builds."""
+    yml_path = _write_yml(tmp_path, _UPSTREAM_ONLY_YML)
+    builder = MarketplaceBuilder(yml_path, BuildOptions())
+    builder._auth_resolver = _FakeAuthResolver()
+    monkeypatch.setattr(
+        "requests.get",
+        lambda *args, **kwargs: _FakeResponse({"full_name": "evil-actor/GitNexus"}),
+    )
+
+    with pytest.raises(BuildError, match="repo identity mismatch"):
+        builder.build()
+
+
+def test_real_factory_honours_upstream_allow_head(tmp_path: Path, monkeypatch) -> None:
+    """Per-upstream allow_head must work even when global build opts forbid HEAD."""
+    yml_path = _write_yml(tmp_path, _UPSTREAM_ALLOW_HEAD_YML)
+    builder = MarketplaceBuilder(yml_path, BuildOptions())
+    builder._auth_resolver = _FakeAuthResolver()
+    builder._resolver = _MockRefResolver(
+        {"abhigyanpatwari/GitNexus": [RemoteRef(name="refs/heads/main", sha=SHA_UPSTREAM_MANIFEST)]}
+    )
+    monkeypatch.setattr(
+        "requests.get",
+        lambda *args, **kwargs: _FakeResponse({"full_name": "abhigyanpatwari/GitNexus"}),
+    )
+    monkeypatch.setattr(
+        "apm_cli.marketplace.upstream_cache._default_fetch_via_github_api",
+        lambda key, auth_resolver: _gitnexus_manifest(),
+    )
+
+    report = builder.build()
+
+    assert report.errors == ()
+    assert len(report.upstream_resolved) == 1
+    assert report.upstream_resolved[0].upstream_manifest_sha == SHA_UPSTREAM_MANIFEST
+    assert any(diag.code == "upstream-tracks-head" for diag in report.upstream_diagnostics)
 
 
 def test_mixed_shape_build_emits_both_plugins(tmp_path: Path) -> None:

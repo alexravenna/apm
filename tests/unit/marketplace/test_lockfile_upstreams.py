@@ -231,7 +231,14 @@ def _patch_resolver_factory(builder: MarketplaceBuilder, *, cache: UpstreamCache
     def _factory(yml):  # type: ignore[no-untyped-def]
         upstreams_by_alias = {u.alias: u for u in yml.upstreams}
 
-        def _ref_to_sha(host: str, owner: str, repo: str, ref: str) -> str:
+        def _ref_to_sha(
+            host: str,
+            owner: str,
+            repo: str,
+            ref: str,
+            *,
+            allow_head: bool = False,
+        ) -> str:
             return SHA_UPSTREAM_MANIFEST
 
         return UpstreamResolver(
