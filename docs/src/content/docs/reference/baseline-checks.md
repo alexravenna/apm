@@ -31,6 +31,7 @@ first failure to skip expensive I/O.
 | ID | Severity | Source | Always on? |
 |---|---|---|---|
 | `manifest-parse` | block | `ci_checks.py` | only when `apm.yml` cannot be parsed |
+| `manifest-missing` | warn / block | `ci_checks.py` | only when `apm.yml` is absent but APM artifacts exist |
 | `lockfile-exists` | block | `ci_checks.py` | yes |
 | `ref-consistency` | block | `ci_checks.py` | yes |
 | `deployed-files-present` | block | `ci_checks.py` | yes |
@@ -56,6 +57,13 @@ the [policy schema](../policy-schema/).
 - **Fails when.** The file exists but cannot be parsed (`yaml.YAMLError`, `ValueError`, or `OSError`).
 - **Effect.** Skips every other check and exits `1`. This is the only check that runs before the lockfile gate.
 - **Remediation.** Fix the YAML syntax error reported in the message and re-run.
+
+### `manifest-missing`
+
+- **What it verifies.** That `apm.yml` is not absent while APM artifacts still exist on disk. Absent artifacts (`.apm/` directory, `apm.lock.yaml`, or the legacy `apm.lock`) with no `apm.yml` are evidence that the manifest may have been deleted to bypass policy and baseline enforcement.
+- **Fails when.** `apm.yml` is absent **and** at least one of `.apm/`, `apm.lock.yaml`, or `apm.lock` is present **and** the audit is running in CI mode (`apm audit --ci`). Outside CI mode the check is advisory (passes with a warning message).
+- **Effect.** In CI mode (`--ci`), exits `1` and stops further checks. In non-CI mode, records the check as passed with an informational message.
+- **Remediation.** Restore `apm.yml` from version control. If the project intentionally has no APM manifest, remove the orphaned `.apm/` directory and lockfile.
 
 ### `lockfile-exists`
 
@@ -119,7 +127,7 @@ the [policy schema](../policy-schema/).
 
 ## Run order and fail-fast
 
-The aggregate runner in `run_baseline_checks` evaluates checks in this order: `manifest-parse` (only when `apm.yml` is unparseable), `lockfile-exists`, `ref-consistency`, `deployed-files-present`, `no-orphaned-packages`, `skill-subset-consistency`, `config-consistency`, `content-integrity`, `includes-consent`. Drift is invoked separately by the audit command after the baseline batch.
+The aggregate runner in `run_baseline_checks` evaluates checks in this order: `manifest-parse` (only when `apm.yml` is unparseable), `manifest-missing` (only when `apm.yml` is absent but APM artifacts exist), `lockfile-exists`, `ref-consistency`, `deployed-files-present`, `no-orphaned-packages`, `skill-subset-consistency`, `config-consistency`, `content-integrity`, `includes-consent`. Drift is invoked separately by the audit command after the baseline batch.
 
 With fail-fast on (the default), the runner stops at the first failing check. `apm audit --ci --no-fail-fast` evaluates every check so the report lists every problem at once.
 
