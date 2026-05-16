@@ -147,11 +147,11 @@ See also: [./compile-zero-output-warning/](./compile-zero-output-warning/), [../
 [x] No harness detected
 ```
 
-Cause: the project has no harness markers (`.github/copilot/`, `.claude/`, `.cursor/`, ...) and no `targets:` block in `apm.yml`. APM no longer defaults to copilot.
+Cause: the project has no harness markers (`.github/copilot/`, `.claude/`, `.cursor/`, ...) and no `targets:` block in `apm.yml`. APM fails closed rather than defaulting to copilot. This applies to both `apm compile` and `apm install --mcp` (MCP install now uses the same fail-closed behavior as `apm install` for any other dependency type).
 
 Fix: pass `--target <harness>` on the command, or declare `targets:` in `apm.yml`. Run `apm targets` to list supported harnesses.
 
-See also: [../reference/cli/targets/](../reference/cli/targets/), [../reference/targets-matrix/](../reference/targets-matrix/)
+See also: [../reference/cli/targets/](../reference/cli/targets/), [../reference/targets-matrix/](../reference/targets-matrix/), [../../consumer/install-mcp-servers/](../../consumer/install-mcp-servers/)
 
 ### `[x] Multiple harnesses detected: <a>, <b>`
 
@@ -224,6 +224,25 @@ Fix: run `apm --help` for the current command list. Upgrade APM if the command w
 See also: [../reference/cli/](../reference/cli/), [./migration/](./migration/)
 
 ## Auth and network
+
+### `Server '<name>' not found in registry <url>`
+
+```
+[x] Server '<name>' not found in registry https://...
+    If this is a self-hosted registry, verify it implements the
+    MCP Registry v0.1 API (apm uses /v0.1/servers/...).
+```
+
+Cause: APM received a 404 from the registry when looking up the named MCP server. Two common causes: (1) the server name is wrong or not published, (2) a self-hosted registry still serves only the legacy `/v0/` paths instead of the required `/v0.1/` paths.
+
+Fix:
+
+- Confirm the name with `apm mcp search <term>`.
+- For self-hosted registries, upgrade the registry software to serve the [MCP Registry v0.1 spec](https://github.com/modelcontextprotocol/registry). The public registries (`api.mcp.github.com` and `registry.modelcontextprotocol.io`) already serve v0.1.
+- To point at a different registry for a single invocation: `apm install --mcp NAME --registry https://my-registry.example.com`.
+- To switch the default registry: `export MCP_REGISTRY_URL=https://my-registry.example.com`.
+
+See also: [../reference/cli/mcp/](../reference/cli/mcp/)
 
 ### `Authentication failed for <host>`
 
