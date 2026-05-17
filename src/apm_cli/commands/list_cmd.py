@@ -1,6 +1,5 @@
 """APM list command."""
 
-import builtins
 import sys
 
 import click
@@ -12,13 +11,10 @@ from ..utils.console import (
 )
 from ._helpers import HIGHLIGHT, RESET, _get_console, _list_available_scripts
 
-# Restore builtin since the Click command function is named ``list``
-list = builtins.list
-
 
 @click.command(help="List available scripts in the current project")
 @click.pass_context
-def list(ctx):  # noqa: F811
+def list(ctx):
     """List all available scripts from apm.yml."""
     logger = CommandLogger("list")
     try:

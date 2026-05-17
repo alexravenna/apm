@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from apm_cli.integration.base_integrator import BaseIntegrator, IntegrationResult
+from apm_cli.integration.targets import TargetProfile
 
 # ---------------------------------------------------------------------------
 # IntegrationResult
@@ -681,7 +682,7 @@ from dataclasses import replace  # noqa: E402
 from apm_cli.integration.targets import KNOWN_TARGETS  # noqa: E402
 
 
-def _make_cowork_target(cowork_root: Path) -> "TargetProfile":  # noqa: F821
+def _make_cowork_target(cowork_root: Path) -> "TargetProfile":
     """Return a frozen TargetProfile with resolved_deploy_root for cowork.
 
     Args:

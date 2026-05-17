@@ -1,6 +1,5 @@
 """APM mcp command group."""
 
-import builtins
 import os
 import sys
 
@@ -8,9 +7,6 @@ import click
 
 from ..core.command_logger import CommandLogger
 from ._helpers import _get_console
-
-# Restore builtin since a subcommand is named ``list``
-list = builtins.list
 
 MCP_REGISTRY_ENV = "MCP_REGISTRY_URL"
 
@@ -413,7 +409,7 @@ def show(ctx, server_name, verbose):
 @click.option("--limit", default=20, show_default=True, help="Number of results to show")
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed output")
 @click.pass_context
-def list(ctx, limit, verbose):  # noqa: F811
+def list(ctx, limit, verbose):
     """List all available MCP servers in the registry."""
     logger = CommandLogger("mcp-list", verbose=verbose)
     registry = None

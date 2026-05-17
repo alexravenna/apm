@@ -20,6 +20,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
+
+_PATH_TYPE = Path
 
 
 @dataclass(frozen=True)
@@ -95,7 +98,7 @@ class TargetProfile:
     target itself is partially supported (e.g. Copilot CLI cannot deploy
     prompts at user scope)."""
 
-    user_root_resolver: Callable[[], Path | None] | None = None  # noqa: F821
+    user_root_resolver: Callable[[], Path | None] | None = None
     """Optional callable that resolves the deploy root at runtime.
 
     When set, ``for_scope(user_scope=True)`` calls this resolver instead of
@@ -107,7 +110,7 @@ class TargetProfile:
     staticmethod) so ``frozen=True`` is preserved.
     """
 
-    resolved_deploy_root: Path | None = None  # noqa: F821
+    resolved_deploy_root: Path | None = None
     """Absolute deploy root populated by ``for_scope()`` when
     ``user_root_resolver`` returns a concrete ``Path``.
 
@@ -209,7 +212,7 @@ class TargetProfile:
             return False
         return primitive in self.primitives
 
-    def deploy_path(self, project_root: Path, *parts: str) -> Path:  # noqa: F821
+    def deploy_path(self, project_root: Path, *parts: str) -> Path:
         """Return the filesystem path for deployment.
 
         When ``resolved_deploy_root`` is set (dynamic-root targets like
@@ -615,7 +618,7 @@ def should_use_legacy_skill_paths() -> bool:
     return val in ("1", "true", "yes")
 
 
-def _resolve_copilot_cowork_root() -> Path | None:  # noqa: F821
+def _resolve_copilot_cowork_root() -> Path | None:
     """Thin wrapper around ``copilot_cowork_paths.resolve_copilot_cowork_skills_dir()``.
 
     Used as the ``user_root_resolver`` callable for the cowork target.
@@ -644,220 +647,21 @@ def _flag_gated(profile: TargetProfile) -> bool:
 
 
 def get_integration_prefixes(targets=None) -> tuple:
-    """Return all known target root prefixes as a tuple.
-
-    Used by ``BaseIntegrator.validate_deploy_path`` so the allow-list
-    stays in sync with registered targets.
-
-    When *targets* is provided, prefixes are derived from those
-    (already scope-resolved) profiles.  Otherwise falls back to
-    ``KNOWN_TARGETS`` for backward compatibility.
-
-    Includes prefixes from ``deploy_root`` overrides (e.g. ``.agents/``
-    for Codex skills) so cross-root paths pass security validation.
-    """
-    source = targets if targets is not None else KNOWN_TARGETS.values()
-    prefixes: list[str] = []
-    seen: set[str] = set()
-    for t in source:
-        # Dynamic-root targets (cowork) use cowork:// prefix in lockfile.
-        # Check the *capability* (user_root_resolver is not None) rather
-        # than the *run-time state* (resolved_deploy_root is not None).
-        # The static KNOWN_TARGETS registry always has resolved_deploy_root
-        # = None (the resolver fires only on per-install copies created by
-        # for_scope()), but cleanup code passes targets=None which falls
-        # back to the static registry.  Using the capability flag ensures
-        # cowork:// entries pass prefix validation during cleanup/uninstall.
-        if t.user_root_resolver is not None:
-            from apm_cli.integration.copilot_cowork_paths import COWORK_LOCKFILE_PREFIX
-
-            if COWORK_LOCKFILE_PREFIX not in seen:
-                seen.add(COWORK_LOCKFILE_PREFIX)
-                prefixes.append(COWORK_LOCKFILE_PREFIX)
-            continue
-        if t.prefix not in seen:
-            seen.add(t.prefix)
-            prefixes.append(t.prefix)
-        for m in t.primitives.values():
-            if m.deploy_root is not None:
-                dp = f"{m.deploy_root}/"
-                if dp not in seen:
-                    seen.add(dp)
-                    prefixes.append(dp)
-    return tuple(prefixes)
+    return _target_runtime.get_integration_prefixes(targets)
 
 
-def active_targets_user_scope(
-    explicit_target: str | list[str] | None = None,
-) -> list:
-    """Return ``TargetProfile`` instances for user-scope deployment.
-
-    Mirrors ``active_targets()`` but operates against ``~/`` and filters
-    out targets that do not support user scope.
-
-    Resolution order:
-
-    1. **Explicit target** (``--target``): returns the matching profile(s)
-       that support user scope.  ``"all"`` returns every user-capable
-       target.  Validity is enforced upstream by
-       :func:`apm_cli.core.target_detection.parse_target_field`; this
-       function does not silently fall back when given unknown tokens.
-    2. **Directory detection**: profiles whose ``effective_root(user_scope=True)``
-       directory exists under ``~/``.
-    3. **Fallback**: ``[copilot]`` -- same default as project scope.
-    """
-    from pathlib import Path
-
-    home = Path.home()
-
-    # --- explicit target ---
-    if explicit_target:
-        # See module docstring on the parse_target_field gate-keeping contract.
-        raw = [explicit_target] if isinstance(explicit_target, str) else list(explicit_target)
-        profiles: list = []
-        seen: set = set()
-        for t in raw:
-            canonical = RUNTIME_TO_CANONICAL_TARGET.get(t, t)
-            if canonical == "all":
-                from apm_cli.core.target_detection import EXPLICIT_ONLY_TARGETS
-
-                return [
-                    p
-                    for p in KNOWN_TARGETS.values()
-                    if p.user_supported and _flag_gated(p) and p.name not in EXPLICIT_ONLY_TARGETS
-                ]
-            profile = KNOWN_TARGETS.get(canonical)
-            if (
-                profile
-                and profile.user_supported
-                and _flag_gated(profile)
-                and profile.name not in seen
-            ):
-                seen.add(profile.name)
-                profiles.append(profile)
-        return profiles
-
-    # --- auto-detect by directory presence at ~/ ---
-    # Targets with detect_by_dir=False (cowork) are never auto-detected.
-    detected = [
-        p
-        for p in KNOWN_TARGETS.values()
-        if p.user_supported
-        and p.detect_by_dir
-        and _flag_gated(p)
-        and (home / p.effective_root(user_scope=True)).is_dir()
-    ]
-    if detected:
-        return detected
-
-    # --- fallback: copilot is the universal default ---
-    return [KNOWN_TARGETS["copilot"]]
+def active_targets_user_scope(explicit_target: str | list[str] | None = None) -> list:
+    return _target_runtime.active_targets_user_scope(explicit_target)
 
 
-def active_targets(
-    project_root,
-    explicit_target: str | list[str] | None = None,
-) -> list:
-    """Return the list of ``TargetProfile`` instances that should be
-    deployed into *project_root*.
-
-    Resolution order:
-
-    1. **Explicit target** (``--target`` flag or ``apm.yml target:``):
-       returns the matching profile(s).  ``"all"`` returns every known
-       target.  Validity is enforced upstream by
-       :func:`apm_cli.core.target_detection.parse_target_field`; unknown
-       tokens never reach here, so this branch never silently falls back
-       to ``[copilot]``.
-    2. **Directory detection**: profiles whose ``root_dir`` already
-       exists under *project_root*.
-    3. **Fallback**: when nothing is detected, returns ``[copilot]``
-       so greenfield projects get a default skills root.
-
-    Args:
-        project_root: The workspace root ``Path``.
-        explicit_target: Canonical target name, list of canonical names,
-            or ``"all"``/``None``.  ``None`` means auto-detect.
-    """
-    from pathlib import Path
-
-    root = Path(project_root)
-
-    # --- explicit target ---
-    if explicit_target:
-        # See module docstring on the parse_target_field gate-keeping contract.
-        raw = [explicit_target] if isinstance(explicit_target, str) else list(explicit_target)
-        profiles: list = []
-        seen: set = set()
-        for t in raw:
-            canonical = RUNTIME_TO_CANONICAL_TARGET.get(t, t)
-            if canonical == "all":
-                # Exclude explicit-only targets (agent-skills) -- they must
-                # be requested individually.
-                # Exclude experimental targets (copilot-cowork) -- they must
-                # be opted into explicitly via `--target copilot-cowork`,
-                # matching the documented contract on EXPERIMENTAL_TARGETS in
-                # core/target_detection.py. Including cowork in `all` for
-                # project scope hits the unconditional project-scope gate in
-                # phases/targets.py and aborts the entire install (#1185 b).
-                from apm_cli.core.target_detection import (
-                    EXPERIMENTAL_TARGETS,
-                    EXPLICIT_ONLY_TARGETS,
-                )
-
-                return [
-                    p
-                    for p in KNOWN_TARGETS.values()
-                    if p.name not in EXPLICIT_ONLY_TARGETS and p.name not in EXPERIMENTAL_TARGETS
-                ]
-            profile = KNOWN_TARGETS.get(canonical)
-            if profile and _flag_gated(profile) and profile.name not in seen:
-                seen.add(profile.name)
-                profiles.append(profile)
-        return profiles
-
-    # --- auto-detect by directory presence ---
-    # Targets with detect_by_dir=False (cowork) are never auto-detected.
-    detected = [
-        p
-        for p in KNOWN_TARGETS.values()
-        if p.detect_by_dir and _flag_gated(p) and (root / p.root_dir).is_dir()
-    ]
-    if detected:
-        return detected
-
-    # --- fallback: copilot is the universal default ---
-    return [KNOWN_TARGETS["copilot"]]
+def active_targets(project_root, explicit_target: str | list[str] | None = None) -> list:
+    return _target_runtime.active_targets(project_root, explicit_target)
 
 
 def resolve_targets(
-    project_root,
-    user_scope: bool = False,
-    explicit_target: str | list[str] | None = None,
+    project_root, user_scope: bool = False, explicit_target: str | list[str] | None = None
 ) -> list:
-    """Return scope-resolved ``TargetProfile`` instances.
+    return _target_runtime.resolve_targets(project_root, user_scope, explicit_target)
 
-    This is the **single entry point** for obtaining deployment targets.
-    It combines target detection (or explicit selection), scope resolution
-    (``for_scope``), and primitive filtering into one call.
 
-    Callers receive profiles where ``root_dir`` is already correct for
-    the requested scope -- no ``effective_root()`` calls needed.
-
-    Args:
-        project_root: Workspace root (``Path.cwd()`` or ``Path.home()``).
-        user_scope: When ``True``, resolve for user-level deployment.
-        explicit_target: Canonical target name, list of canonical names,
-            or ``"all"``.  ``None`` means auto-detect.
-    """
-    if user_scope:
-        raw = active_targets_user_scope(explicit_target)
-    else:
-        raw = active_targets(project_root, explicit_target)
-
-    resolved = []
-    for t in raw:
-        scoped = t.for_scope(user_scope=user_scope)
-        if scoped is not None:
-            resolved.append(scoped)
-    return resolved
+from . import target_runtime as _target_runtime

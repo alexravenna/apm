@@ -1,24 +1,14 @@
 """Skill integration functionality for APM packages (Claude Code & Cursor support)."""
 
-import filecmp
-import hashlib  # noqa: F401
-import re
-import shutil
 import sys
-from dataclasses import dataclass
-from datetime import datetime  # noqa: F401
-from pathlib import Path
 
-import frontmatter  # noqa: F401
-
-from apm_cli.integration.base_integrator import BaseIntegrator
+from apm_cli.models.apm_package import PackageContentType
 
 # DEPRECATED -- use IntegrationResult directly for new code.
 # Kept for backward compatibility. The fields map as follows:
 # skill_created -> IntegrationResult.skill_created
 # sub_skills_promoted -> IntegrationResult.sub_skills_promoted
 # skill_path, references_copied -> not mapped (skill-internal)
-from .naming import normalize_skill_name, to_hyphen_case, validate_skill_name
 
 
 def get_effective_type(package_info) -> "PackageContentType":

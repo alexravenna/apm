@@ -181,7 +181,6 @@ def run(ctx: InstallContext) -> None:
     project_root = ctx.project_root
     update_refs = ctx.update_refs
     logger = ctx.logger
-    verbose = ctx.verbose  # noqa: F841
 
     def download_callback(dep_ref, modules_dir, parent_chain="", parent_pkg=None):
         """Download a package during dependency resolution.

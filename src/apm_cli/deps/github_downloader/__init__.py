@@ -18,3 +18,20 @@ from .class_ import (  # noqa: F401
     _debug,
     _rmtree,
 )
+
+# Re-export contract for ruff --ignore-noqa.
+__all__ = [
+    "AuthResolver",
+    "GitHubPackageDownloader",
+    "Repo",
+    "_close_repo",
+    "_debug",
+    "_rich_warning",
+    "_rmtree",
+    "git",
+    "requests",
+    "shutil",
+    "tempfile",
+    "time",
+    "validate_apm_package",
+]

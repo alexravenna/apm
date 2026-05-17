@@ -8,3 +8,16 @@ from .typing_helpers import (  # noqa: F401
     should_compile_instructions,
     should_install_skill,
 )
+
+# Re-export contract for ruff --ignore-noqa.
+__all__ = [
+    "SkillIntegrationResult",
+    "SkillIntegrator",
+    "copy_skill_to_target",
+    "get_effective_type",
+    "normalize_skill_name",
+    "should_compile_instructions",
+    "should_install_skill",
+    "to_hyphen_case",
+    "validate_skill_name",
+]

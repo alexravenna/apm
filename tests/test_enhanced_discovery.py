@@ -14,7 +14,8 @@ import yaml
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 try:
-    from apm_cli.models.apm_package import APMPackage, DependencyReference  # noqa: F401
+    from apm_cli.models.apm_package import APMPackage as APMPackage
+    from apm_cli.models.apm_package import DependencyReference as DependencyReference
     from apm_cli.primitives.discovery import (
         discover_primitives_with_dependencies,
         get_dependency_declaration_order,
@@ -27,7 +28,9 @@ try:
         Context,
         Instruction,
         PrimitiveCollection,
-        PrimitiveConflict,  # noqa: F401
+    )
+    from apm_cli.primitives.models import (
+        PrimitiveConflict as PrimitiveConflict,
     )
 except ImportError as e:
     print(f"Import error: {e}")

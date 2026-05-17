@@ -656,14 +656,14 @@ class TestLocalInstallAirGap:
         ]
 
         try:
-            import requests  # noqa: F401
+            import requests as requests
 
             patches.append(patch("requests.Session.send", side_effect=_fail_requests))
         except ImportError:
             pass
 
         try:
-            import httpx  # noqa: F401
+            import httpx as httpx
 
             patches.append(patch("httpx.Client.send", side_effect=_fail_httpx))
             patches.append(patch("httpx.AsyncClient.send", side_effect=_fail_httpx))

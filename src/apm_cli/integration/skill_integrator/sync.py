@@ -1,21 +1,262 @@
 """Skill integration functionality for APM packages (Claude Code & Cursor support)."""
 
-import filecmp
-import hashlib  # noqa: F401
-import re
 import shutil
-from dataclasses import dataclass
-from datetime import datetime  # noqa: F401
 from pathlib import Path
 
-import frontmatter  # noqa: F401
-
-from apm_cli.integration.base_integrator import BaseIntegrator
+from .naming import normalize_skill_name, validate_skill_name
 
 
-# DEPRECATED -- use IntegrationResult directly for new code.
-# Kept for backward compatibility. The fields map as follows:
-# skill_created -> IntegrationResult.skill_created
-# sub_skills_promoted -> IntegrationResult.sub_skills_promoted
-# skill_path, references_copied -> not mapped (skill-internal)
-# Sync helpers are implemented as SkillIntegrator methods in class_.py.
+def sync_integration(
+    self,
+    apm_package,
+    project_root: Path,
+    managed_files: set | None = None,  # noqa: RUF013
+    targets=None,
+) -> dict[str, int]:
+    """Sync skill directories with currently installed packages.
+
+    Derives skill prefixes dynamically from *targets* (or
+    ``KNOWN_TARGETS``) so user-scope paths like ``.copilot/skills/``
+    and ``.config/opencode/skills/`` are handled correctly.
+
+    When *managed_files* is provided, only removes skill directories
+    whose paths appear in the set.  Otherwise falls back to
+    npm-style orphan detection (derives expected names from installed
+    dependencies).
+
+    Args:
+        apm_package: APMPackage with current dependencies
+        project_root: Root directory of the project
+        managed_files: Set of relative paths known to be APM-managed
+        targets: Optional list of (scope-resolved) TargetProfile objects.
+                 When ``None``, uses ``KNOWN_TARGETS``.
+
+    Returns:
+        Dict with cleanup statistics
+    """
+    from apm_cli.integration.targets import KNOWN_TARGETS
+
+    source = targets if targets is not None else list(KNOWN_TARGETS.values())
+
+    stats = {"files_removed": 0, "errors": 0}
+
+    # Build the set of valid skill prefixes from targets
+    skill_prefixes: list[str] = []
+    for t in source:
+        if not t.supports("skills"):
+            continue
+        # Dynamic-root targets (cowork) use cowork:// URI prefix.
+        if t.user_root_resolver is not None:
+            from apm_cli.integration.copilot_cowork_paths import COWORK_LOCKFILE_PREFIX
+
+            if COWORK_LOCKFILE_PREFIX not in skill_prefixes:
+                skill_prefixes.append(COWORK_LOCKFILE_PREFIX)
+            continue
+        sm = t.primitives["skills"]
+        effective_root = sm.deploy_root or t.root_dir
+        skill_prefixes.append(f"{effective_root}/skills/")
+    skill_prefix_tuple = tuple(skill_prefixes)
+
+    if managed_files is not None:
+        # Manifest-based removal -- only remove tracked skill directories
+        project_root_resolved = project_root.resolve()
+
+        # Lazy-resolve cowork root at most once per invocation
+        # (mirrors the pattern in cleanup.py and sync_remove_files).
+        _cowork_root_resolved: bool = False
+        _cowork_root_cached: Path | None = None
+        _cowork_skipped: int = 0
+
+        for rel_path in managed_files:
+            if not rel_path.startswith(skill_prefix_tuple):
+                continue
+            if ".." in rel_path:
+                continue
+
+            # ── Cowork:// paths ──────────────────────────────────
+            from apm_cli.integration.copilot_cowork_paths import COWORK_URI_SCHEME
+
+            if rel_path.startswith(COWORK_URI_SCHEME):
+                try:
+                    if not _cowork_root_resolved:
+                        from apm_cli.integration.copilot_cowork_paths import (
+                            resolve_copilot_cowork_skills_dir,
+                        )
+
+                        _cowork_root_cached = resolve_copilot_cowork_skills_dir()
+                        _cowork_root_resolved = True
+                    if _cowork_root_cached is None:
+                        _cowork_skipped += 1
+                        continue
+                    from apm_cli.integration.copilot_cowork_paths import from_lockfile_path
+
+                    target = from_lockfile_path(rel_path, _cowork_root_cached)
+                except Exception:
+                    stats["errors"] += 1
+                    continue
+            else:
+                target = project_root / rel_path
+                if not str(target.resolve()).startswith(str(project_root_resolved)):
+                    continue
+
+            if not target.exists():
+                continue
+
+            try:
+                if target.is_dir():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+                stats["files_removed"] += 1
+            except Exception:
+                stats["errors"] += 1
+
+        # One-time warning when cowork entries were skipped
+        # because the OneDrive path is unavailable.
+        if _cowork_skipped > 0:
+            from apm_cli.utils.console import _rich_warning
+
+            _rich_warning(
+                f"Cowork: skipping {_cowork_skipped} skill "
+                f"{'entry' if _cowork_skipped == 1 else 'entries'}"
+                " -- OneDrive path not detected.\n"
+                "Run: apm config set copilot-cowork-skills-dir <path>  "
+                "(or set APM_COPILOT_COWORK_SKILLS_DIR)\n"
+                "to clean up these entries on the next install/uninstall.",
+                symbol="warning",
+            )
+
+        return stats
+
+    # Legacy fallback: npm-style orphan detection
+    # Build set of expected skill directory names from installed packages
+    installed_skill_names = set()
+    for dep in apm_package.get_apm_dependencies():
+        raw_name = dep.repo_url.split("/")[-1]
+        if dep.is_virtual and dep.virtual_path:
+            raw_name = dep.virtual_path.split("/")[-1]
+        is_valid, _ = validate_skill_name(raw_name)
+        skill_name = raw_name if is_valid else normalize_skill_name(raw_name)
+        installed_skill_names.add(skill_name)
+
+        # Also include promoted sub-skills from installed packages
+        install_path = dep.get_install_path(project_root / "apm_modules")
+        sub_skills_dir = install_path / ".apm" / "skills"
+        if sub_skills_dir.is_dir():
+            for sub_skill_path in sub_skills_dir.iterdir():
+                if sub_skill_path.is_dir() and (sub_skill_path / "SKILL.md").exists():
+                    raw_sub = sub_skill_path.name
+                    is_valid, _ = validate_skill_name(raw_sub)
+                    installed_skill_names.add(
+                        raw_sub if is_valid else normalize_skill_name(raw_sub)
+                    )
+
+    # Clean all target skill directories dynamically
+    seen_cleanup_dirs: set[Path] = set()
+    for t in source:
+        if not t.supports("skills"):
+            continue
+        sm = t.primitives["skills"]
+        effective_root = sm.deploy_root or t.root_dir
+
+        # Special guard for cross-tool deploy_root (.agents/)
+        # Only clean if the owning target dir exists
+        if sm.deploy_root:
+            if not (project_root / t.root_dir).is_dir():
+                continue
+
+        skills_dir = project_root / effective_root / "skills"
+
+        # Dedup: skip if same resolved skills dir already cleaned.
+        resolved_skills = skills_dir.resolve()
+        if resolved_skills in seen_cleanup_dirs:
+            import logging
+
+            logging.getLogger(__name__).debug(
+                "%s -- already processed, skipping cleanup for %s", skills_dir, t.name
+            )
+            continue
+        seen_cleanup_dirs.add(resolved_skills)
+
+        if skills_dir.exists():
+            result = self._clean_orphaned_skills(
+                skills_dir, installed_skill_names, project_root=project_root
+            )
+            stats["files_removed"] += result["files_removed"]
+            stats["errors"] += result["errors"]
+
+    return stats
+
+
+def _clean_orphaned_skills(
+    self,
+    skills_dir: Path,
+    installed_skill_names: set,
+    *,
+    project_root: Path | None = None,
+) -> dict[str, int]:
+    """Clean orphaned skills from a skills directory.
+
+    Uses npm-style approach: any skill directory not matching an installed
+    package name is considered orphaned and removed.
+
+    For the cross-client ``.agents/skills/`` directory, only removes skill
+    directories that appear in the lockfile's ``deployed_files`` to avoid
+    deleting foreign skills placed by other tools (Codex CLI, manual).
+
+    Args:
+        skills_dir: Path to skills directory (.github/skills/, .claude/skills/, etc.)
+        installed_skill_names: Set of expected skill directory names
+        project_root: Project root for lockfile-based ownership check.
+
+    Returns:
+        Dict with cleanup statistics
+    """
+    files_removed = 0
+    errors = 0
+
+    # For .agents/skills/: only delete skills that APM owns (appear in lockfile).
+    is_agents_dir = skills_dir.parent.name == ".agents"
+    lockfile_owned_skills: set[str] | None = None
+    if is_agents_dir and project_root is not None:
+        lockfile_owned_skills = self._get_lockfile_owned_agent_skills(project_root)
+
+    for skill_subdir in skills_dir.iterdir():
+        if skill_subdir.is_dir():
+            if skill_subdir.name not in installed_skill_names:
+                # Ownership check: skip foreign skills in .agents/skills/.
+                if lockfile_owned_skills is not None:
+                    if skill_subdir.name not in lockfile_owned_skills:
+                        continue
+                try:
+                    shutil.rmtree(skill_subdir)
+                    files_removed += 1
+                except Exception:
+                    errors += 1
+
+    return {"files_removed": files_removed, "errors": errors}
+
+
+def _get_lockfile_owned_agent_skills(project_root: Path) -> set[str]:
+    """Return the set of skill names under ``.agents/skills/`` in the lockfile.
+
+    Used by ``_clean_orphaned_skills`` to avoid deleting foreign skills
+    in the cross-client ``.agents/`` directory.
+    """
+    owned: set[str] = set()
+    try:
+        from apm_cli.deps.lockfile import LockFile, get_lockfile_path
+
+        lockfile = LockFile.read(get_lockfile_path(project_root))
+        if lockfile and lockfile.dependencies:
+            for dep in lockfile.dependencies.values():
+                for f in dep.deployed_files:
+                    if f.startswith(".agents/skills/"):
+                        parts = f[len(".agents/skills/") :].split("/")
+                        if parts and parts[0]:
+                            owned.add(parts[0])
+    except (FileNotFoundError, OSError, KeyError, ValueError, TypeError, AttributeError) as exc:
+        import logging
+
+        logging.getLogger(__name__).debug("Could not read lockfile for ownership check: %s", exc)
+    return owned

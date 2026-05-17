@@ -16,6 +16,7 @@ from apm_cli.integration.skill_integrator import (
     to_hyphen_case,
     validate_skill_name,
 )
+from apm_cli.integration.targets import TargetProfile
 from apm_cli.models.apm_package import (
     APMPackage,
     DependencyReference,
@@ -3774,7 +3775,7 @@ from unittest.mock import MagicMock  # noqa: E402
 from apm_cli.integration.targets import KNOWN_TARGETS  # noqa: E402
 
 
-def _make_resolved_cowork_target(cowork_root: Path) -> "TargetProfile":  # noqa: F821
+def _make_resolved_cowork_target(cowork_root: Path) -> "TargetProfile":
     """Return a frozen TargetProfile with resolved_deploy_root set for cowork.
 
     Args:

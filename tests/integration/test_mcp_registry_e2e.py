@@ -360,7 +360,7 @@ class TestMCPRegistryE2E:
         not _is_registry_healthy(),
         reason="GitHub MCP server configured as remote-only (no packages) - skipping installation tests",
     )
-    def test_empty_string_handling_e2e(self, temp_e2e_home, apm_binary):
+    def _test_empty_string_handling_e2e_legacy(self, temp_e2e_home, apm_binary):
         """Test end-to-end empty string and defaults handling during installation."""
         print("\n=== Testing Empty String and Defaults Handling ===")
 
@@ -475,7 +475,7 @@ class TestMCPRegistryE2E:
                 print("[WARN] Copilot configuration not created (binary may not be available)")
                 # This is OK for testing - we're validating the adapter logic
 
-    def test_empty_string_handling_e2e(self, temp_e2e_home, apm_binary):  # noqa: F811
+    def test_empty_string_handling_e2e(self, temp_e2e_home, apm_binary):
         """Test end-to-end empty string and defaults handling during installation."""
         print("\n=== Testing Empty String and Defaults Handling ===")
 

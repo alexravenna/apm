@@ -1,39 +1,27 @@
 """DependencyReference model  -- core dependency representation and parsing."""
 
-import re
 import urllib.parse
-from dataclasses import dataclass
-from pathlib import Path
 
-from ....cache.url_normalize import SCP_LIKE_RE
 from ....utils.github_host import (
-    default_host,
     is_artifactory_path,
     is_azure_devops_hostname,
     is_github_hostname,
     is_gitlab_hostname,
     is_supported_git_host,
     is_visualstudio_legacy_hostname,
-    maybe_raise_bare_fqdn_github_gitlab_conflict,
-    parse_artifactory_path,
     unsupported_host_error,
 )
 from ....utils.path_security import (
     PathTraversalError,
-    ensure_path_within,
     validate_path_segments,
 )
 from ...validation import InvalidVirtualPackageExtensionError
-from ..types import VirtualPackageType
 
 # Default ports per URI scheme -- used to normalise away redundant
 # explicit ports (e.g. https://host:443/...) so that lockfile keys
 # and error messages stay consistent regardless of how the user
 # spelled the URL.
 _DEFAULT_SCHEME_PORTS: dict[str, int] = {"https": 443, "http": 80, "ssh": 22}
-
-
-from .core import DependencyReference
 
 
 @classmethod

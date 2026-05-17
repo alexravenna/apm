@@ -1,61 +1,6 @@
 """GitHub package downloader for APM dependencies."""
 
-import contextlib
-import os
-import re
-import stat  # noqa: F401
-import subprocess
-import sys
-import tempfile
-import threading
-import time  # noqa: F401
-from collections.abc import Callable
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Union
-
-import git  # noqa: F401  # re-exported for tests that patch github_downloader.git
-import requests
-from git import RemoteProgress, Repo
-from git.exc import GitCommandError
-
-from ...core.auth import AuthContext, AuthResolver
-from ...models.apm_package import (
-    APMPackage,
-    DependencyReference,
-    GitReferenceType,
-    PackageInfo,
-    PackageType,
-    RemoteRef,
-    ResolvedReference,
-    validate_apm_package,
-)
-from ...utils.console import _rich_warning  # noqa: F401  # re-exported for tests
-from ...utils.github_host import (
-    default_host,
-    is_azure_devops_hostname,  # noqa: F401
-    is_github_hostname,
-    sanitize_token_url_in_message,
-)
-from ...utils.yaml_io import yaml_to_str
-from ..bare_cache import (
-    bare_clone_with_fallback,
-    clone_with_fallback,
-    fetch_sha_into_bare,
-    materialize_from_bare,
-)
-from ..download_strategies import DownloadDelegate
-from ..git_remote_ops import (
-    parse_ls_remote_output,
-    semver_sort_key,
-    sort_remote_refs,
-)
-from ..transport_selection import (
-    ProtocolPreference,
-    TransportSelector,
-    is_fallback_allowed,
-    protocol_pref_from_env,
-)
+from git import RemoteProgress
 
 # Public docs anchor for the cross-protocol fallback caveat surfaced by the
 # #786 warning. Lives under the dependencies guide, next to the canonical

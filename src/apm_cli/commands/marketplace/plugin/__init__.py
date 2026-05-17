@@ -206,3 +206,8 @@ __all__ = [
     "remove",
     "set_cmd",
 ]
+# Re-export contract for ruff --ignore-noqa.
+__all__ = [
+    "MarketplaceYmlError",
+    "_is_interactive",
+]

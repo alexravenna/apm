@@ -37,7 +37,6 @@ import click
 from apm_cli.core.command_logger import CommandLogger
 from apm_cli.utils.console import STATUS_SYMBOLS
 from apm_cli.utils.guards import _ReadOnlyProjectGuard
-from apm_cli.utils.normalization import _normalize_line_endings, _strip_bom, _strip_build_id
 
 if TYPE_CHECKING:
     from apm_cli.deps.lockfile import LockedDependency, LockFile
@@ -95,6 +94,9 @@ class CacheMissError(RuntimeError):
 
 from apm_cli.utils.normalization import (  # noqa: E402  -- re-exported for back-compat
     _normalize,
+    _normalize_line_endings,
+    _strip_bom,
+    _strip_build_id,
 )
 
 # ---------------------------------------------------------------------------

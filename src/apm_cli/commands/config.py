@@ -1,6 +1,5 @@
 """APM config command group."""
 
-import builtins
 import sys
 from pathlib import Path
 
@@ -10,9 +9,6 @@ from ..constants import APM_YML_FILENAME
 from ..core.command_logger import CommandLogger
 from ..version import get_version
 from ._helpers import HIGHLIGHT, RESET, _get_console, _load_apm_config
-
-# Restore builtin since a subcommand is named ``set``
-set = builtins.set
 
 _BOOLEAN_TRUE_VALUES = {"true", "1", "yes"}
 _BOOLEAN_FALSE_VALUES = {"false", "0", "no"}
@@ -180,7 +176,7 @@ def config(ctx):
 @config.command(help="Set a configuration value")
 @click.argument("key")
 @click.argument("value")
-def set(key, value):  # noqa: F811
+def set(key, value):
     """Set a configuration value.
 
     Examples:

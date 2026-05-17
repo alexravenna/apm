@@ -34,8 +34,7 @@ from ..utils.path_security import PathTraversalError
 from .errors import AuthenticationError, DirectDependencyError
 
 if TYPE_CHECKING:
-    from ..core.auth import AuthResolver
-    from ..core.command_logger import InstallLogger
+    pass
 
 
 # CRITICAL: Shadow Python builtins that share names with Click commands.

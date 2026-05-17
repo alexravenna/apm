@@ -20,7 +20,7 @@ from click.testing import CliRunner
 _LOCAL_BUNDLE_EXISTS = importlib.util.find_spec("apm_cli.bundle.local_bundle") is not None
 _INTEGRATE_EXISTS = False
 try:
-    from apm_cli.install.services import integrate_local_bundle  # noqa: F401
+    from apm_cli.install.services import integrate_local_bundle as integrate_local_bundle
 
     _INTEGRATE_EXISTS = True
 except ImportError:

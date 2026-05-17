@@ -471,10 +471,6 @@ class TestContextOptimizer:
 
     def test_real_project_optimization_benefits(self, temp_project):
         """Test that optimization provides real benefits over naive placement."""
-        ContextOptimizer(str(temp_project))
-
-    def test_real_project_optimization_benefits(self, temp_project):  # noqa: F811
-        """Test that optimization provides real benefits over naive placement."""
         optimizer = ContextOptimizer(str(temp_project))
 
         # Create instructions that would cause pollution if not optimized

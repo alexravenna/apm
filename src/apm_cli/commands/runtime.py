@@ -1,6 +1,5 @@
 """APM runtime command group."""
 
-import builtins
 import sys
 
 import click
@@ -11,9 +10,6 @@ from ..utils.console import (
     _rich_panel,
 )
 from ._helpers import HIGHLIGHT, RESET, _get_console
-
-# Restore builtin since a subcommand is named ``list``
-list = builtins.list
 
 
 @click.group(help="Manage AI runtimes (experimental)")
@@ -52,7 +48,7 @@ def setup(runtime_name, version, vanilla):
 
 
 @runtime.command(help="List available and installed runtimes")
-def list():  # noqa: F811
+def list():
     """List all available runtimes and their installation status."""
     logger = CommandLogger("runtime list")
     try:

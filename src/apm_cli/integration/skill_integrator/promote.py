@@ -1,17 +1,5 @@
 """Skill integration functionality for APM packages (Claude Code & Cursor support)."""
 
-import filecmp
-import hashlib  # noqa: F401
-import re
-import shutil
-from dataclasses import dataclass
-from datetime import datetime  # noqa: F401
-from pathlib import Path
-
-import frontmatter  # noqa: F401
-
-from apm_cli.integration.base_integrator import BaseIntegrator
-
 
 # DEPRECATED -- use IntegrationResult directly for new code.
 # Kept for backward compatibility. The fields map as follows:
