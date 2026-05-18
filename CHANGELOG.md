@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Introduced `apm plugin init` as the canonical noun-verb command for scaffolding a plugin authoring project. The new command mirrors `apm marketplace init` -- both now live under their respective noun namespaces (`apm plugin`, `apm marketplace`) so the producer surface composes via verbs instead of project-type flags. Two primitive producer postures (single-plugin and aggregator) plus the hybrid composition that runs both in one repo all emerge from composing `apm plugin init` and `apm marketplace init`; APM does not gate shapes behind a flag. New documentation pages cover [Repo shapes](https://microsoft.github.io/apm/producer/repo-shapes/), [Releasing from any CI](https://microsoft.github.io/apm/producer/releasing-from-any-ci/), and [Versioning strategies](https://microsoft.github.io/apm/producer/versioning-strategies/). (#1348)
+- `apm init` now prints a "Next steps" panel that surfaces both `apm plugin init` (for producers) and `apm marketplace init` (for marketplace authors) alongside the consumer commands, teaching the noun-verb taxonomy at zero migration cost. (#1348)
 - Added APM-managed runtime binary resolution before PATH lookup; `find_runtime_binary()` now includes path-traversal security guards via `validate_path_segments` and `ensure_path_within`. (#605)
 - Added codex >= v0.116 compatibility warning for GitHub Models in `setup-codex.sh` and `setup-codex.ps1`. (#605)
 - Added `LAST_COMPAT_VERSION_MINOR` constant to both Codex setup scripts so the compatibility boundary is defined once. (#605)
@@ -39,9 +41,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `apm.yml` schema: new optional block `marketplace.versioning: { strategy: lockstep | tag_pattern | per_package }` (default `lockstep`); strict key set. Additive -- existing manifests are unaffected. (#1348)
 - `apm marketplace doctor` adds a `version alignment` row surfacing the same logic as `--check-versions` (informational, no exit-code change). (#1348)
 
+### Deprecated
+
+- `apm init --plugin` and `apm init --marketplace` are deprecated in favor of `apm plugin init` and `apm marketplace init`. The legacy flags still work; they print a one-line stderr warning naming the replacement and **will be removed in v0.16**. Existing scripts continue to function unchanged during the deprecation window. (#1348)
+
 ### Changed
 
-- Refactored duplicate code blocks across MCP client adapters and marketplace modules: extracted shared helpers `_apply_pypi_homebrew_generic_config`, `_apply_auth_and_headers_impl`, and `_resolve_env_vars_with_prompting` into `MCPClientAdapter` base class; extracted `iter_semver_tags` into `marketplace._shared`; fixed homebrew formula slash-stripping, `Authorization` header skip-only-when-injected logic, and CI-aware prompting guard (`CI`/`APM_E2E_TESTS` env vars now suppress interactive prompts). (#1360)
+- Extracted shared helpers `_apply_pypi_homebrew_generic_config`, `_apply_auth_and_headers_impl`, and `_resolve_env_vars_with_prompting` into `MCPClientAdapter` base class; extracted `iter_semver_tags` into `marketplace._shared`; fixed homebrew formula slash-stripping, `Authorization` header skip-only-when-injected logic, and CI-aware prompting guard (`CI`/`APM_E2E_TESTS` env vars now suppress interactive prompts). (#1360)
 - `apm pack` now appends a vendor-neutral catalog after per-output success lines listing each marketplace artifact and a single docs anchor (`producer/publish-to-a-marketplace/#consume-from-any-assistant`); the block never names a vendor CLI surface and is suppressed in dry-run. (#1348)
 - `apm marketplace init` now scaffolds the outputs map as a single-line `# codex: {}` commented toggle (replacing the verbose multi-line block); flipping one line enables Codex output. (#1348)
 - `apm marketplace doctor` adds an informational `format coverage` row when a `marketplace:` block is present, listing configured and missing supported outputs; informational only and skipped when there is no marketplace config. (#1348)
