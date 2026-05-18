@@ -6,6 +6,20 @@ Resolves markdown links to context files across the APM lifecycle:
 - Runtime: Resolve links when executing prompts
 
 Following KISS principle - simple, pragmatic implementation.
+
+Module layout
+-------------
+``link_resolver`` (this file)
+    Public API: :class:`LinkResolutionContext`, :class:`UnifiedLinkResolver`,
+    and backward-compatibility re-exports of legacy helpers.
+
+``_link_asset_rewrite``
+    In-package asset link rewriting helpers (feature #1147), extracted to
+    keep this file under 500 lines. Used only by :class:`UnifiedLinkResolver`.
+
+``_link_legacy``
+    Legacy module-level helper functions kept for backward compatibility.
+    Re-exported from this module so existing imports remain unbroken.
 """
 
 import builtins
@@ -15,12 +29,31 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-from apm_cli.utils.path_security import PathTraversalError, ensure_path_within
+from apm_cli.compilation import _link_asset_rewrite
+from apm_cli.compilation._link_legacy import (
+    _detect_circular_references,
+    _remove_frontmatter,
+    _resolve_path,
+    resolve_markdown_links,
+    validate_link_targets,
+)
 
 # CRITICAL: Shadow Click commands to prevent namespace collision
 set = builtins.set
 list = builtins.list
 dict = builtins.dict
+
+__all__ = [
+    # Core public API
+    "LinkResolutionContext",
+    "UnifiedLinkResolver",
+    # Legacy re-exports (backward compatibility)
+    "_detect_circular_references",
+    "_remove_frontmatter",
+    "_resolve_path",
+    "resolve_markdown_links",
+    "validate_link_targets",
+]
 
 
 @dataclass
@@ -384,332 +417,20 @@ class UnifiedLinkResolver:
         return any(path_lower.endswith(ext) for ext in self.CONTEXT_EXTENSIONS)
 
     # ------------------------------------------------------------------
-    # In-package asset link rewriting (#1147)
+    # In-package asset link rewriting (#1147) — delegated to _link_asset_rewrite
     # ------------------------------------------------------------------
 
     def _is_rewritable_relative_link(self, link_path: str) -> bool:
-        """Decide whether a link is a candidate for in-package asset rewrite.
-
-        Filters out everything that obviously is not a relative filesystem
-        path inside the package: empty links, fragment-only links, links
-        with any URL scheme, root-absolute paths, and protocol-relative
-        URLs. The remaining links are *relative paths* that may resolve
-        to a sibling file inside the source package.
-
-        Args:
-            link_path: Raw link target as it appears in the markdown.
-
-        Returns:
-            True if the link should be considered for asset rewriting.
-        """
-        if not link_path:
-            return False
-        stripped = link_path.strip()
-        if not stripped:
-            return False
-        if stripped.startswith("#"):
-            return False
-        if stripped.startswith("//"):
-            return False
-        if stripped.startswith("/"):
-            # Root-absolute paths are consumer-side, not package-relative.
-            return False
-        # Any URL scheme (http:, mailto:, file:, javascript:, ...): skip.
-        try:
-            parsed = urlparse(stripped)
-        except Exception:
-            return False
-        return not parsed.scheme
+        """Delegate to :func:`_link_asset_rewrite.is_rewritable_relative_link`."""
+        return _link_asset_rewrite.is_rewritable_relative_link(link_path)
 
     @staticmethod
     def _split_link_target(link_path: str) -> tuple[str, str]:
-        """Split a markdown link target into ``(path, suffix)``.
-
-        Preserves a trailing ``#fragment`` or ``?query`` so the resolver
-        can rewrite only the path component and re-append the suffix
-        verbatim. Markdown link titles (``"title"`` after a space) are
-        intentionally NOT stripped here -- the existing ``LINK_PATTERN``
-        treats the whole inside of the parentheses as a single group, so
-        a title would be embedded in ``link_path``. Such links are passed
-        through unchanged by ``_is_rewritable_relative_link`` indirectly
-        (they typically contain a space and resolve to nothing).
-
-        Returns:
-            ``(path_part, suffix)`` where ``suffix`` includes its leading
-            delimiter (``#`` or ``?``) or is the empty string. When both
-            delimiters are present (e.g. ``doc.md?x=1#sec``), the split
-            occurs at whichever appears first so the full remainder is
-            preserved verbatim.
-        """
-        candidates = [link_path.find(sep) for sep in ("#", "?")]
-        positions = [idx for idx in candidates if idx != -1]
-        if not positions:
-            return link_path, ""
-        idx = min(positions)
-        return link_path[:idx], link_path[idx:]
+        """Delegate to :func:`_link_asset_rewrite.split_link_target`."""
+        return _link_asset_rewrite.split_link_target(link_path)
 
     def _resolve_in_package_asset_link(
         self, link_path: str, ctx: LinkResolutionContext
     ) -> str | None:
-        """Rewrite an in-package relative link to its post-install location.
-
-        Resolves ``link_path`` relative to ``ctx.source_file.parent``,
-        validates the resolved path lies inside ``ctx.package_root`` via
-        :func:`ensure_path_within` (which also normalises symlinks and
-        Windows extended prefixes), and returns the relative path from
-        ``ctx.target_location`` to the resolved file. Preserves any
-        ``#fragment`` or ``?query`` suffix.
-
-        Returns ``None`` if any of the following hold; the caller
-        preserves the original link unchanged:
-
-        * ``ctx.package_root`` is not a directory (defensive).
-        * The candidate file does not exist or is not a regular file.
-        * The candidate escapes ``ctx.package_root`` (symlink traversal,
-          ``..`` chains, etc.).
-        * Path computation raises (broken filesystem, encoding, ...).
-        """
-        if ctx.package_root is None:
-            return None
-        if not ctx.package_root.is_dir():
-            return None
-
-        path_part, suffix = self._split_link_target(link_path)
-        if not path_part:
-            return None
-
-        try:
-            source_dir = (
-                ctx.source_file.parent if ctx.source_file.is_file() else ctx.source_location
-            )
-        except OSError:
-            return None
-
-        try:
-            candidate = (source_dir / path_part).resolve()
-        except (OSError, ValueError):
-            return None
-
-        if not candidate.exists() or not candidate.is_file():
-            return None
-
-        try:
-            ensure_path_within(candidate, ctx.package_root)
-        except PathTraversalError:
-            return None
-
-        # Replay-frame translation (#1182): during audit-replay of a
-        # self-package, ``ctx.base_dir`` is the scratch tmpdir but
-        # ``ctx.package_root`` (and therefore ``candidate``) still points
-        # at the real project tree. Computing ``relpath`` directly would
-        # produce a tmpdir-traversal link (e.g. ``../../../../Users/...``)
-        # that diverges from what real install writes to disk, causing
-        # spurious drift. Detect the cross-frame case (candidate outside
-        # base_dir) and re-anchor the target onto package_root so the
-        # rewrite mirrors the install-time output.
-        relpath_anchor = ctx.target_location
-        try:
-            candidate_in_base = candidate.is_relative_to(ctx.base_dir)
-        except (OSError, ValueError):
-            candidate_in_base = True
-        if not candidate_in_base:
-            try:
-                target_rel = ctx.target_location.relative_to(ctx.base_dir)
-                relpath_anchor = ctx.package_root / target_rel
-            except (OSError, ValueError):
-                relpath_anchor = ctx.target_location
-
-        try:
-            relative_path = os.path.relpath(candidate, relpath_anchor)
-        except (OSError, ValueError):
-            return None
-
-        rewritten = relative_path.replace(os.sep, "/")
-        return f"{rewritten}{suffix}"
-
-
-# Legacy functions for backward compatibility
-def resolve_markdown_links(content: str, base_path: Path) -> str:
-    """Resolve markdown links and inline referenced content.
-
-    Args:
-        content (str): Content with markdown links to resolve.
-        base_path (Path): Base directory for resolving relative paths.
-
-    Returns:
-        str: Content with resolved links and inlined content where appropriate.
-    """
-    # Pattern to match markdown links: [text](path)
-    link_pattern = r"\[([^\]]+)\]\(([^)]+)\)"
-
-    def replace_link(match):
-        text = match.group(1)
-        path = match.group(2)
-
-        # Skip external URLs
-        if path.startswith(("http://", "https://", "ftp://", "mailto:")):
-            return match.group(0)  # Return original link
-
-        # Skip anchors
-        if path.startswith("#"):
-            return match.group(0)  # Return original link
-
-        # Resolve relative path
-        full_path = _resolve_path(path, base_path)
-
-        if full_path and full_path.exists() and full_path.is_file():
-            # For certain file types, inline the content
-            if full_path.suffix.lower() in [".md", ".txt"]:
-                try:
-                    file_content = full_path.read_text(encoding="utf-8")
-                    # Remove frontmatter if present
-                    file_content = _remove_frontmatter(file_content)
-                    return f"**{text}**:\n\n{file_content}"
-                except (OSError, UnicodeDecodeError):
-                    # Fall back to original link if file can't be read
-                    return match.group(0)
-            else:
-                # For other file types, keep the link but update path if needed
-                return match.group(0)
-        else:
-            # File doesn't exist, keep original link (will be caught by validation)
-            return match.group(0)
-
-    return re.sub(link_pattern, replace_link, content)
-
-
-def validate_link_targets(content: str, base_path: Path) -> builtins.list[str]:
-    """Validate that all referenced files exist.
-
-    Args:
-        content (str): Content to validate links in.
-        base_path (Path): Base directory for resolving relative paths.
-
-    Returns:
-        List[str]: List of error messages for missing or invalid links.
-    """
-    errors = []
-
-    # Check markdown links
-    link_pattern = r"\[([^\]]+)\]\(([^)]+)\)"
-    for match in re.finditer(link_pattern, content):
-        text = match.group(1)
-        path = match.group(2)
-
-        # Skip external URLs and anchors
-        if path.startswith(("http://", "https://", "ftp://", "mailto:")) or path.startswith("#"):
-            continue
-
-        # Resolve and check path
-        full_path = _resolve_path(path, base_path)
-        if not full_path or not full_path.exists():
-            errors.append(f"Referenced file not found: {path} (in link '{text}')")
-        elif not full_path.is_file() and not full_path.is_dir():
-            errors.append(
-                f"Referenced path is neither a file nor directory: {path} (in link '{text}')"
-            )
-
-    return errors
-
-
-def _resolve_path(path: str, base_path: Path) -> Path | None:
-    """Resolve a relative path against a base path.
-
-    Args:
-        path (str): Relative path to resolve.
-        base_path (Path): Base directory for resolution.
-
-    Returns:
-        Optional[Path]: Resolved path or None if invalid.
-    """
-    if not path or not path.strip():
-        return None
-    # NUL bytes survive ``Path()`` construction on POSIX but every downstream
-    # filesystem call (``.exists()``, ``.is_file()``, ``.read_text()``) raises
-    # ``ValueError``. Callers in this module do not catch ``ValueError`` so an
-    # unguarded NUL would abort markdown link resolution / validation. Reject
-    # at the resolver boundary instead.
-    if "\x00" in path:
-        return None
-    try:
-        if Path(path).is_absolute():
-            return Path(path)
-        else:
-            return base_path / path
-    except (OSError, ValueError):
-        return None
-
-
-def _remove_frontmatter(content: str) -> str:
-    """Remove YAML frontmatter from content.
-
-    Args:
-        content (str): Content that may contain frontmatter.
-
-    Returns:
-        str: Content without frontmatter.
-    """
-    # Remove YAML frontmatter (--- at start, --- at end)
-    if content.startswith("---\n"):
-        lines = content.split("\n")
-        in_frontmatter = True
-        content_lines = []
-
-        for _i, line in enumerate(lines[1:], 1):  # Skip first ---
-            if line.strip() == "---" and in_frontmatter:
-                in_frontmatter = False
-                continue
-            if not in_frontmatter:
-                content_lines.append(line)
-
-        content = "\n".join(content_lines)
-
-    return content.strip()
-
-
-def _detect_circular_references(
-    content: str, base_path: Path, visited: set | None = None
-) -> builtins.list[str]:
-    """Detect circular references in markdown links.
-
-    Args:
-        content (str): Content to check for circular references.
-        base_path (Path): Base directory for resolving paths.
-        visited (Optional[set]): Set of already visited files.
-
-    Returns:
-        List[str]: List of circular reference errors.
-    """
-    if visited is None:
-        visited = set()
-
-    errors = []
-    current_file = base_path
-
-    if current_file in visited:
-        errors.append(f"Circular reference detected: {current_file}")
-        return errors
-
-    visited.add(current_file)
-
-    # Check markdown links for potential circular references
-    link_pattern = r"\[([^\]]+)\]\(([^)]+)\)"
-    for match in re.finditer(link_pattern, content):
-        path = match.group(2)
-
-        # Skip external URLs and anchors
-        if path.startswith(("http://", "https://", "ftp://", "mailto:")) or path.startswith("#"):
-            continue
-
-        full_path = _resolve_path(path, base_path.parent if base_path.is_file() else base_path)
-        if full_path and full_path.exists() and full_path.is_file():
-            if full_path.suffix.lower() in [".md", ".txt"]:
-                try:
-                    linked_content = full_path.read_text(encoding="utf-8")
-                    errors.extend(
-                        _detect_circular_references(linked_content, full_path, visited.copy())
-                    )
-                except (OSError, UnicodeDecodeError):
-                    continue
-
-    return errors
+        """Delegate to :func:`_link_asset_rewrite.resolve_in_package_asset_link`."""
+        return _link_asset_rewrite.resolve_in_package_asset_link(link_path, ctx)

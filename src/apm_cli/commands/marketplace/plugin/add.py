@@ -32,21 +32,20 @@ from . import (
 @click.option("--include-prerelease", is_flag=True, help="Include prerelease versions")
 @click.option("--no-verify", is_flag=True, help="Skip remote reachability check")
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed output")
-def add(
-    source,
-    name,
-    version,
-    ref,
-    subdir,
-    tag_pattern,
-    tags,
-    include_prerelease,
-    no_verify,
-    verbose,
-):
+def add(**kwargs):
     """Add a package entry to marketplace authoring config."""
-    from ....marketplace.yml_editor import add_plugin_entry
+    from ....marketplace.yml_editor import PluginEntrySpec, add_plugin_entry
 
+    source = kwargs["source"]
+    name = kwargs["name"]
+    version = kwargs["version"]
+    ref = kwargs["ref"]
+    subdir = kwargs["subdir"]
+    tag_pattern = kwargs["tag_pattern"]
+    tags = kwargs["tags"]
+    include_prerelease = kwargs["include_prerelease"]
+    no_verify = kwargs["no_verify"]
+    verbose = kwargs["verbose"]
     logger = CommandLogger("marketplace-package-add", verbose=verbose)
     yml = _ensure_yml_exists(logger)
 
@@ -69,14 +68,16 @@ def add(
     try:
         resolved_name = add_plugin_entry(
             yml,
-            source=source,
-            name=name,
-            version=version,
-            ref=ref,
-            subdir=subdir,
-            tag_pattern=tag_pattern,
-            tags=parsed_tags,
-            include_prerelease=include_prerelease,
+            PluginEntrySpec(
+                source=source,
+                name=name,
+                version=version,
+                ref=ref,
+                subdir=subdir,
+                tag_pattern=tag_pattern,
+                tags=parsed_tags,
+                include_prerelease=include_prerelease,
+            ),
         )
     except MarketplaceYmlError as exc:
         logger.error(str(exc), symbol="error")

@@ -34,6 +34,7 @@ from .._helpers import (
     _create_minimal_apm_yml,
     _get_default_config,  # noqa: F401
 )
+from ._local_bundle_router import _route_local_bundle_or_raise
 
 set = builtins.set
 list = builtins.list
@@ -145,90 +146,41 @@ def install(ctx: click.Context, **params: object) -> None:
 
             legacy_skill_paths = should_use_legacy_skill_paths()
 
-        # ----------------------------------------------------------------
-        # Local-bundle early-exit (issue #1098).  When the sole positional
-        # argument is a filesystem path that detect_local_bundle() recognises
-        # as an APM-pack bundle, we skip the dependency-resolution pipeline
-        # entirely and deploy the bundle's files directly.  Local bundles
-        # are imperative deploys -- they do NOT mutate apm.yml.
-        # ----------------------------------------------------------------
-        if len(packages) == 1 and not mcp_name and (_probe := Path(packages[0])).exists():
-            from ...bundle.local_bundle import detect_local_bundle as _detect_lb
-            from ...install.local_bundle_handler import install_local_bundle as _install_lb
-
-            _bundle_info = _detect_lb(_probe)
-            if _bundle_info is not None:
-                _install_lb(
-                    bundle_info=_bundle_info,
-                    bundle_arg=packages[0],
-                    target=target,
-                    global_=global_,
-                    force=force,
-                    dry_run=dry_run,
-                    verbose=verbose,
-                    alias=alias,
-                    logger=logger,
-                    legacy_skill_paths=legacy_skill_paths,
-                    # Rejected-flag context for consolidated UsageError:
-                    rejected_flags={
-                        "--update": update,
-                        "--only": only,
-                        "--runtime": runtime,
-                        "--exclude": exclude,
-                        "--dev": dev,
-                        "--ssh": use_ssh,
-                        "--https": use_https,
-                        "--allow-protocol-fallback": allow_protocol_fallback,
-                        "--mcp": mcp_name,
-                        "--registry": registry_url,
-                        "--skill": bool(skill_names),
-                        "--parallel-downloads": parallel_downloads != 4,
-                        "--allow-insecure": allow_insecure,
-                        "--allow-insecure-host": bool(allow_insecure_hosts),
-                        "--no-policy": no_policy,
-                    },
-                )
-                # Local bundle install renders its own summary; mark
-                # ``summary_rendered = True`` so the finally-block (line ~1423)
-                # does not emit a misleading "install interrupted" line on the
-                # success path.  See issue #1207 D3.
-                summary_rendered = True
-                return
-            # IM7: path exists but isn't a recognised bundle.  For tarball
-            # extensions (.tar.gz / .tgz) the user clearly meant a bundle
-            # artifact, so raise a targeted UsageError instead of falling
-            # through to the registry path (which would try to clone).
-            # For bare directories we still fall through, because
-            # ``apm install ./packages/source-pkg`` is a supported local-path
-            # install that goes through the dependency-resolver pipeline.
-            _suffix = _probe.name.lower()
-            if _probe.is_file() and (_suffix.endswith(".tar.gz") or _suffix.endswith(".tgz")):
-                # Distinguish legacy --format apm bundles (apm.lock.yaml
-                # present, plugin.json absent) from arbitrary tarballs so
-                # the error message guides the user to the right next step.
-                from ...bundle.local_bundle import _looks_like_legacy_apm_bundle
-
-                if _looks_like_legacy_apm_bundle(_probe):
-                    raise click.UsageError(
-                        f"'{packages[0]}' was packed with '--format apm' (legacy format). "
-                        "'apm install <bundle>' requires the plugin format. "
-                        "Repack with 'apm pack --format plugin --archive', "
-                        "or use 'apm unpack' to deploy the legacy bundle."
-                    )
-                raise click.UsageError(
-                    f"'{packages[0]}' is not a valid APM bundle archive "
-                    "(no plugin.json found at the bundle root). "
-                    "Use 'apm install org/package' for registry installs, "
-                    "or repack the source with 'apm pack'."
-                )
-        # IM8: --as is only meaningful for local-bundle installs.  If we get
-        # here, no local bundle was detected, so reject --as instead of
-        # silently ignoring it.
-        if alias:
-            raise click.UsageError(
-                "--as requires a local bundle path (directory or .tar.gz "
-                "produced by 'apm pack'). It has no effect on registry installs."
-            )
+        # Local-bundle early-exit (issue #1098) and --as validation (IM8).
+        # Delegates to _route_local_bundle_or_raise in _local_bundle_router.py.
+        # Returns True if a bundle was detected + installed; raises UsageError
+        # for unrecognised tarballs or --as without a bundle path.
+        if _route_local_bundle_or_raise(
+            packages=packages,
+            mcp_name=mcp_name,
+            target=target,
+            global_=global_,
+            force=force,
+            dry_run=dry_run,
+            verbose=verbose,
+            alias=alias,
+            logger=logger,
+            legacy_skill_paths=legacy_skill_paths,
+            update=update,
+            only=only,
+            runtime=runtime,
+            exclude=exclude,
+            dev=dev,
+            use_ssh=use_ssh,
+            use_https=use_https,
+            allow_protocol_fallback=allow_protocol_fallback,
+            registry_url=registry_url,
+            skill_names=skill_names,
+            parallel_downloads=parallel_downloads,
+            allow_insecure=allow_insecure,
+            allow_insecure_hosts=allow_insecure_hosts,
+            no_policy=no_policy,
+        ):
+            # Local bundle install renders its own summary; mark
+            # summary_rendered so the finally-block does not emit a
+            # misleading "install interrupted" line.  See issue #1207 D3.
+            summary_rendered = True
+            return
         # HACK(#852): surface --verbose to deeper auth layers via env var until
         # AuthResolver gains a first-class verbose channel. Restored in finally
         # below to keep the mutation scoped to this command invocation.

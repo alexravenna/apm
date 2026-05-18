@@ -153,11 +153,9 @@ def _match_double_star(path_parts: list, pattern_parts: list) -> bool:
 
     if part == "**":
         # ** matches zero or more directories
-        if _match_double_star(path_parts, pattern_parts[1:]):
-            return True
-        if _match_double_star(path_parts[1:], pattern_parts):  # noqa: SIM103
-            return True
-        return False
+        return _match_double_star(path_parts, pattern_parts[1:]) or _match_double_star(
+            path_parts[1:], pattern_parts
+        )
     else:
         if fnmatch.fnmatch(path_parts[0], part):
             return _match_double_star(path_parts[1:], pattern_parts[1:])

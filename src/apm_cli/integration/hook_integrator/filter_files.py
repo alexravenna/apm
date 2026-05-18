@@ -211,42 +211,50 @@ def sync_integration(
         if config is not None:
             json_path = project_root / t.root_dir / config.config_filename
             if t.name == "claude":
-                # Claude uses settings.json with special structure
-                if json_path.exists():
-                    try:
-                        with open(json_path, encoding="utf-8") as f:
-                            settings = json.load(f)
-
-                        if "hooks" in settings:
-                            modified = False
-                            for event_name in list(settings["hooks"].keys()):
-                                matchers = settings["hooks"][event_name]
-                                if isinstance(matchers, list):
-                                    filtered = [
-                                        m
-                                        for m in matchers
-                                        if not (isinstance(m, dict) and "_apm_source" in m)
-                                    ]
-                                    if len(filtered) != len(matchers):
-                                        modified = True
-                                    settings["hooks"][event_name] = filtered
-                                    if not filtered:
-                                        del settings["hooks"][event_name]
-
-                            if not settings["hooks"]:
-                                del settings["hooks"]
-
-                            if modified:
-                                with open(json_path, "w", encoding="utf-8") as f:
-                                    json.dump(settings, f, indent=2)
-                                    f.write("\n")
-                                stats["files_removed"] += 1
-                    except (json.JSONDecodeError, OSError):
-                        stats["errors"] += 1
+                _clean_claude_apm_hooks(json_path, stats)
             else:
                 self._clean_apm_entries_from_json(json_path, stats)
 
     return stats
+
+
+def _clean_claude_apm_hooks(json_path: Path, stats: dict[str, int]) -> None:
+    """Remove APM-tagged entries from a Claude ``settings.json`` hooks file.
+
+    Handles Claude's nested matcher-group structure: filters out top-level
+    matcher dicts that carry an ``_apm_source`` marker, then cleans up
+    empty event arrays and the ``hooks`` key itself.
+    """
+    if not json_path.exists():
+        return
+    try:
+        with open(json_path, encoding="utf-8") as f:
+            settings = json.load(f)
+
+        if "hooks" not in settings:
+            return
+
+        modified = False
+        for event_name in list(settings["hooks"].keys()):
+            matchers = settings["hooks"][event_name]
+            if isinstance(matchers, list):
+                filtered = [m for m in matchers if not (isinstance(m, dict) and "_apm_source" in m)]
+                if len(filtered) != len(matchers):
+                    modified = True
+                settings["hooks"][event_name] = filtered
+                if not filtered:
+                    del settings["hooks"][event_name]
+
+        if not settings["hooks"]:
+            del settings["hooks"]
+
+        if modified:
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(settings, f, indent=2)
+                f.write("\n")
+            stats["files_removed"] += 1
+    except (json.JSONDecodeError, OSError):
+        stats["errors"] += 1
 
 
 def _clean_apm_entries_from_json(json_path: Path, stats: dict[str, int]) -> None:

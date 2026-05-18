@@ -14,22 +14,21 @@ from pathlib import Path
 from ..models import CheckResult, CIAuditResult
 from .class_ import (
     ApmPolicy,
-    CompilationPolicy,
-    DependencyPolicy,
-    DependencyReference,
     LockFile,
-    ManifestPolicy,
     UnmanagedFilesPolicy,
 )
 from .dependency_checks import (
     _check_compilation_strategy,
+    _check_compilation_target,
     _check_dependency_allowlist,
     _check_dependency_denylist,
+    _check_includes_explicit,
     _check_mcp_allowlist,
     _check_mcp_denylist,
     _check_mcp_self_defined,
     _check_mcp_transport,
     _check_required_manifest_fields,
+    _check_required_package_version,
     _check_required_packages,
     _check_required_packages_deployed,
     _check_scripts_policy,
@@ -374,161 +373,4 @@ def _check_unmanaged_files(
         passed=False,
         message=f"{len(unmanaged)} unmanaged file(s) in governance directories",
         details=unmanaged,
-    )
-
-
-def _check_includes_explicit(
-    manifest_includes,
-    policy: ManifestPolicy,
-) -> CheckResult:
-    """Check: manifest declares an explicit ``includes:`` list when policy requires it.
-
-    ``manifest_includes`` is the parsed value of the manifest's ``includes:``
-    field as exposed by :class:`APMPackage` -- one of ``None`` (field
-    absent), the literal string ``"auto"``, or a list of repo-relative
-    path strings.
-
-    Violation when ``policy.require_explicit_includes`` is True and
-    ``manifest_includes`` is ``None`` or ``"auto"``.
-    """
-    if not policy.require_explicit_includes:
-        return CheckResult(
-            name="explicit-includes",
-            passed=True,
-            message="Explicit includes not required by policy",
-        )
-
-    if manifest_includes is None:
-        return CheckResult(
-            name="explicit-includes",
-            passed=False,
-            message=(
-                "Policy requires explicit 'includes:' paths but none are "
-                "declared. Add 'includes: [<path>, ...]' to apm.yml with "
-                "the paths you intend to publish."
-            ),
-            details=[
-                "includes: <absent>, require_explicit_includes: true",
-            ],
-        )
-
-    if manifest_includes == "auto":
-        return CheckResult(
-            name="explicit-includes",
-            passed=False,
-            message=(
-                "Policy requires explicit 'includes:' paths but manifest "
-                "uses 'includes: auto'. Replace with an explicit list of "
-                "paths."
-            ),
-            details=[
-                "includes: 'auto', require_explicit_includes: true",
-            ],
-        )
-
-    return CheckResult(
-        name="explicit-includes",
-        passed=True,
-        message="Manifest declares explicit includes paths",
-    )
-
-
-def _check_compilation_target(
-    raw_yml: dict | None,
-    policy: CompilationPolicy,
-) -> CheckResult:
-    """Check 11: compilation target matches policy."""
-    enforce = policy.target.enforce
-    allow = policy.target.allow
-
-    if not enforce and allow is None:
-        return CheckResult(
-            name="compilation-target",
-            passed=True,
-            message="No compilation target restrictions configured",
-        )
-
-    target = (raw_yml or {}).get("target")
-    if not target:
-        return CheckResult(
-            name="compilation-target",
-            passed=True,
-            message="No compilation target set in manifest",
-        )
-
-    # Normalize target to a list for uniform checking
-    target_list = target if isinstance(target, list) else [target]
-
-    if enforce:
-        if enforce not in target_list:
-            return CheckResult(
-                name="compilation-target",
-                passed=False,
-                message=f"Enforced target '{enforce}' not present in {target_list}",
-                details=[f"target: {target}, enforced: {enforce}"],
-            )
-    elif allow is not None:
-        allow_set = set(allow) if isinstance(allow, (list, tuple)) else {allow}
-        disallowed = [t for t in target_list if t not in allow_set]
-        if disallowed:
-            return CheckResult(
-                name="compilation-target",
-                passed=False,
-                message=f"Target(s) {disallowed} not in allowed list {sorted(allow_set)}",
-                details=[f"target: {target}, allowed: {sorted(allow_set)}"],
-            )
-
-    return CheckResult(
-        name="compilation-target",
-        passed=True,
-        message="Compilation target compliant",
-    )
-
-
-def _check_required_package_version(
-    deps: list[DependencyReference],
-    lock: LockFile | None,
-    policy: DependencyPolicy,
-) -> CheckResult:
-    """Check 5: required packages with version pins match per resolution strategy."""
-    pinned = [(r, r.split("#", 1)) for r in policy.effective_require if "#" in r]
-    if not pinned or lock is None:
-        return CheckResult(
-            name="required-package-version",
-            passed=True,
-            message="No version-pinned required packages",
-        )
-
-    resolution = policy.require_resolution
-    violations: list[str] = []
-    warnings: list[str] = []
-
-    lock_by_name = {locked.get_unique_key(): locked for _key, locked in lock.dependencies.items()}
-
-    for _req, parts in pinned:
-        pkg_name, expected_ref = parts[0], parts[1]
-
-        locked = lock_by_name.get(pkg_name)
-        if locked is not None:
-            actual_ref = locked.resolved_ref or ""
-            if actual_ref != expected_ref:
-                detail = f"{pkg_name}: expected ref '{expected_ref}', got '{actual_ref}'"
-                if resolution in {"block", "policy-wins"}:  # noqa: PLR1714
-                    violations.append(detail)
-                else:  # project-wins
-                    warnings.append(detail)
-
-    if not violations:
-        return CheckResult(
-            name="required-package-version",
-            passed=True,
-            message="Required package versions match"
-            + (f" (warnings: {len(warnings)})" if warnings else ""),
-            details=warnings,
-        )
-    return CheckResult(
-        name="required-package-version",
-        passed=False,
-        message=f"{len(violations)} version mismatch(es)",
-        details=violations,
     )

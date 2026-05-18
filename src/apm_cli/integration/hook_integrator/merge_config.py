@@ -111,6 +111,71 @@ _HOOK_FILE_TARGET_SUFFIXES: dict[str, set[str]] = {
 }
 
 
+def _clear_prior_package_hooks(
+    json_config: dict,
+    event_name: str,
+    package_name: str,
+    reverse_map: "dict[str, set[str]]",
+    cleared_events: set,
+) -> None:
+    """Drop prior entries owned by *package_name* for *event_name* (idempotent upsert).
+
+    Only strips once per event per install run -- a package with multiple hook
+    files targeting the same event contributes entries in turn, so stripping on
+    every iteration would erase earlier files' fresh entries.  If *event_name*
+    is already in *cleared_events*, returns immediately.
+
+    Also clears alias events that normalise to *event_name* to handle
+    corrupted installs with mixed-case event keys.
+    """
+    if event_name in cleared_events:
+        return
+    # Clear from the normalised event
+    json_config["hooks"][event_name] = [
+        e
+        for e in json_config["hooks"][event_name]
+        if not (isinstance(e, dict) and e.get("_apm_source") == package_name)
+    ]
+    # Also clear from any alias events that map to this normalised name.
+    for alias in reverse_map.get(event_name, set()):
+        if alias != event_name and alias in json_config["hooks"]:
+            json_config["hooks"][alias] = [
+                e
+                for e in json_config["hooks"][alias]
+                if not (isinstance(e, dict) and e.get("_apm_source") == package_name)
+            ]
+            # Remove the alias key entirely if now empty
+            if not json_config["hooks"][alias]:
+                del json_config["hooks"][alias]
+    cleared_events.add(event_name)
+
+
+def _dedup_hook_entries(entries: list) -> list:
+    """Deduplicate hook entries by ``(_apm_source, content)`` key.
+
+    Safety net for edge cases where multiple source files produce
+    semantically identical entries for the same event.
+    """
+    seen_content: list[dict] = []
+    deduped: list = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            deduped.append(entry)
+            continue
+        # Build comparison key (all fields except _apm_source)
+        cmp = {k: v for k, v in sorted(entry.items()) if k != "_apm_source"}
+        source = entry.get("_apm_source")
+        is_dup = False
+        for seen in seen_content:
+            if seen.get("_source") == source and seen.get("_cmp") == cmp:
+                is_dup = True
+                break
+        if not is_dup:
+            seen_content.append({"_source": source, "_cmp": cmp})
+            deduped.append(entry)
+    return deduped
+
+
 def _integrate_merged_hooks(
     self,
     config: "_MergeHookConfig",
@@ -219,50 +284,15 @@ def _integrate_merged_hooks(
             # with multiple hook files targeting the same event
             # contributes each file's entries in turn, and stripping
             # on every iteration would erase earlier files' work.
-            if event_name not in cleared_events:
-                # Clear from the normalised event
-                json_config["hooks"][event_name] = [
-                    e
-                    for e in json_config["hooks"][event_name]
-                    if not (isinstance(e, dict) and e.get("_apm_source") == package_name)
-                ]
-                # Also clear from any alias events that map to
-                # this normalised name (handles migration from
-                # corrupted installs with mixed-case event keys).
-                for alias in reverse_map.get(event_name, set()):
-                    if alias != event_name and alias in json_config["hooks"]:
-                        json_config["hooks"][alias] = [
-                            e
-                            for e in json_config["hooks"][alias]
-                            if not (isinstance(e, dict) and e.get("_apm_source") == package_name)
-                        ]
-                        # Remove the alias key entirely if now empty
-                        if not json_config["hooks"][alias]:
-                            del json_config["hooks"][alias]
-                cleared_events.add(event_name)
+            _clear_prior_package_hooks(
+                json_config, event_name, package_name, reverse_map, cleared_events
+            )
             json_config["hooks"][event_name].extend(entries)
 
             # Deduplicate same-package entries by content.
             # Safety net for edge cases where multiple source files
             # produce semantically identical entries.
-            seen_content: list[dict] = []
-            deduped: list = []
-            for entry in json_config["hooks"][event_name]:
-                if not isinstance(entry, dict):
-                    deduped.append(entry)
-                    continue
-                # Build comparison key (all fields except _apm_source)
-                cmp = {k: v for k, v in sorted(entry.items()) if k != "_apm_source"}
-                source = entry.get("_apm_source")
-                is_dup = False
-                for seen in seen_content:
-                    if seen.get("_source") == source and seen.get("_cmp") == cmp:
-                        is_dup = True
-                        break
-                if not is_dup:
-                    seen_content.append({"_source": source, "_cmp": cmp})
-                    deduped.append(entry)
-            json_config["hooks"][event_name] = deduped
+            json_config["hooks"][event_name] = _dedup_hook_entries(json_config["hooks"][event_name])
 
         hooks_integrated += 1
 

@@ -289,3 +289,66 @@ def _cleanup_empty_parents(deleted_path: Path, base_dir: Path) -> None:
         except (OSError, PathTraversalError):
             break
         parent = parent.parent
+
+
+def run_skill_migration(ctx) -> None:
+    """Orchestrate legacy skill-path auto-migration within the install pipeline.
+
+    Called from :func:`apm_cli.install.pipeline.run_install_pipeline` after the
+    cleanup phase and before lockfile generation.  Skipped when
+    ``--legacy-skill-paths`` is active or there is no existing lockfile.
+
+    Detects legacy per-client skill deployments still recorded in the lockfile,
+    checks for collisions with the new converged ``.agents/skills/`` location,
+    and either executes the migration or surfaces a collision error.
+
+    Side effects:
+    * May delete old per-client skill files from disk.
+    * May mutate ``ctx.existing_lockfile.deployed_files`` in place.
+    * Emits info/warning/error lines to the console.
+    * Pushes collision errors to ``ctx.diagnostics`` when present.
+    """
+    from ..utils.console import _rich_error, _rich_info, _rich_warning
+
+    _migration_plans = detect_legacy_skill_deployments(ctx.existing_lockfile, ctx.project_root)
+    if not _migration_plans:
+        return
+
+    _collisions = check_collisions(_migration_plans, ctx.project_root)
+    if _collisions:
+        # H2: collision is an error, not a warning.
+        _rich_error(
+            COLLISION_HEADER_TEMPLATE.format(count=len(_collisions)),
+            symbol="error",
+        )
+        for _c in _collisions:
+            _rich_error(f"  {_c}", symbol="error")
+        # H5: actionable next-step hint.
+        _rich_info(COLLISION_HINT, symbol="info")
+        # H2: surface via DiagnosticCollector.
+        if ctx.diagnostics:
+            for _c in _collisions:
+                ctx.diagnostics.error(
+                    f"Skill migration collision: {_c}",
+                    package="skill-path-migration",
+                )
+        return
+
+    _migration_result = execute_migration(_migration_plans, ctx.existing_lockfile, ctx.project_root)
+    _total = len(_migration_result.deleted) + len(_migration_result.skipped_no_file)
+    if _total > 0:
+        # H3: suppress info when quiet.
+        if not (ctx.logger and getattr(ctx.logger, "_quiet", False)):
+            _rich_info(
+                MIGRATION_SUMMARY_TEMPLATE.format(count=_total),
+                symbol="info",
+            )
+        # H4: enumerate deleted paths when verbose.
+        if ctx.verbose and _migration_result.deleted:
+            for _dp in _migration_result.deleted:
+                _rich_info(f"  removed {_dp}", symbol="info")
+    if _migration_result.failed:
+        _rich_warning(
+            f"  {len(_migration_result.failed)} file(s) could not be deleted (will retry next install)",
+            symbol="warning",
+        )

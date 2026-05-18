@@ -6,18 +6,20 @@ https://code.visualstudio.com/docs/copilot/chat/mcp-servers
 """
 
 import json
-import re
 from pathlib import Path
 
 from ...registry.client import SimpleRegistryClient
 from ...registry.integration import RegistryIntegration
 from ...utils.console import _rich_warning
-from .base import _ENV_VAR_RE, _INPUT_VAR_RE, MCPClientAdapter
-
-# Legacy ``<VAR>`` placeholder (Copilot CLI / Codex only). VS Code does not
-# resolve angle-bracket placeholders, so emitting them produces literal
-# ``<VAR>`` text in headers / env values -- silently breaking auth at runtime.
-_LEGACY_ANGLE_VAR_RE = re.compile(r"<([A-Z_][A-Z0-9_]*)>")
+from ._vscode_format import (
+    _LEGACY_ANGLE_VAR_RE,
+    _build_package_input_vars,
+    _build_python_command_args,
+    _extract_package_args,
+    _select_remote_with_url,
+    _translate_env_vars_for_vscode,
+)
+from .base import _INPUT_VAR_RE, MCPClientAdapter
 
 
 class VSCodeClientAdapter(MCPClientAdapter):
@@ -30,6 +32,39 @@ class VSCodeClientAdapter(MCPClientAdapter):
 
     target_name: str = "vscode"
     mcp_servers_key: str = "servers"
+
+    # Re-expose pure formatting helpers as staticmethods so that both
+    # ``self.method(...)`` and ``VSCodeClientAdapter.method(...)`` work.
+    _translate_env_vars_for_vscode = staticmethod(_translate_env_vars_for_vscode)
+    _extract_package_args = staticmethod(_extract_package_args)
+    _select_remote_with_url = staticmethod(_select_remote_with_url)
+    _build_python_command_args = staticmethod(_build_python_command_args)
+    _build_package_input_vars = staticmethod(_build_package_input_vars)
+
+    @staticmethod
+    def _warn_on_legacy_angle_vars(mapping, server_name, field):
+        """Emit a warning when legacy ``<VAR>`` placeholders appear in *mapping*.
+
+        VS Code does not resolve ``<VAR>`` placeholders, so they would render
+        as literal ``<VAR>`` text in the generated mcp.json -- silently
+        breaking auth headers / env values at server-start. Surface this as
+        an explicit warning so authors can switch to the cross-harness
+        ``${VAR}`` / ``${env:VAR}`` syntax (see manifest-schema reference).
+        """
+        if not mapping:
+            return
+        offenders = []
+        for value in mapping.values():
+            if isinstance(value, str):
+                offenders.extend(_LEGACY_ANGLE_VAR_RE.findall(value))
+        if offenders:
+            unique = sorted(set(offenders))
+            _rich_warning(
+                f"Server '{server_name}' {field} use legacy <VAR> placeholder(s) "
+                f"({', '.join('<' + n + '>' for n in unique)}) which VS Code "
+                f"cannot resolve. Use ${{VAR}} or ${{env:VAR}} instead so the "
+                f"value resolves at runtime."
+            )
 
     def __init__(
         self,
@@ -238,229 +273,154 @@ class VSCodeClientAdapter(MCPClientAdapter):
                 - server_config is the formatted server configuration for mcp.json
                 - input_vars is a list of input variable definitions
         """
-        # Initialize the base config structure
-        server_config = {}
-        input_vars = []
-
         # Self-defined stdio deps carry raw command/args  -- use directly
         raw = server_info.get("_raw_stdio")
         if raw:
-            server_config = {
-                "type": "stdio",
-                "command": raw["command"],
-                "args": raw["args"],
-            }
-            if raw.get("env"):
-                # Translate bare ${VAR} -> ${env:VAR} so VS Code's runtime env
-                # interpolation resolves them at server-start. ${input:...}
-                # references are preserved for input-variable extraction below.
-                self._warn_on_legacy_angle_vars(
-                    raw["env"], server_info.get("name", "unknown"), "env"
-                )
-                env_translated = self._translate_env_vars_for_vscode(raw["env"])
-                server_config["env"] = env_translated
-                input_vars.extend(
-                    self._extract_input_variables(env_translated, server_info.get("name", ""))
-                )
-            return server_config, input_vars
+            return self._format_raw_stdio_config(server_info, raw)
 
         # Check for packages information
         if server_info.get("packages"):
-            package = self._select_best_package(server_info["packages"])
-            runtime_hint = package.get("runtime_hint", "") if package else ""
-            registry_name = self._infer_registry_name(package) if package else ""
-            pkg_args = self._extract_package_args(package) if package else []
+            return self._format_package_config(server_info)
 
-            # Handle npm packages
-            if runtime_hint == "npx" or registry_name == "npm":
-                package_name = package.get("name")
-                # Filter out package name from extracted args to avoid duplication
-                # (legacy runtime_arguments often include it as the first entry)
-                extra_args = [a for a in pkg_args if a != package_name] if pkg_args else []
+        # Check for SSE endpoints or remotes
+        return self._format_remote_config(server_info)
 
-                server_config = {
-                    "type": "stdio",
-                    "command": "npx",
-                    "args": ["-y", package_name, *extra_args],
-                }
-
-            # Handle docker packages
-            elif runtime_hint == "docker" or registry_name == "docker":
-                args = pkg_args if pkg_args else ["run", "-i", "--rm", package.get("name")]
-
-                server_config = {"type": "stdio", "command": "docker", "args": args}
-
-            # Handle Python packages
-            elif (
-                runtime_hint in ["uvx", "pip", "python"]
-                or "python" in runtime_hint
-                or registry_name == "pypi"
-            ):
-                # Determine the command based on runtime_hint
-                if runtime_hint == "uvx":
-                    command = "uvx"
-                elif "python" in runtime_hint:
-                    command = "python3" if runtime_hint in ["python", "pip"] else runtime_hint
-                else:
-                    command = "uvx"
-
-                if pkg_args:
-                    args = pkg_args
-                elif runtime_hint == "uvx" or command == "uvx":
-                    args = [package.get("name", "")]
-                else:
-                    module_name = (
-                        package.get("name", "").replace("mcp-server-", "").replace("-", "_")
-                    )
-                    args = ["-m", f"mcp_server_{module_name}"]
-
-                server_config = {"type": "stdio", "command": command, "args": args}
-
-            # Generic fallback for packages with a runtime_hint (e.g. dotnet, nuget, mcpb)
-            elif package and runtime_hint:
-                args = pkg_args if pkg_args else [package.get("name", "")]
-
-                server_config = {"type": "stdio", "command": runtime_hint, "args": args}
-
-            # Add environment variables if present
-            env_vars = (
-                package.get("environment_variables") or package.get("environmentVariables") or []
+    def _format_raw_stdio_config(self, server_info, raw):
+        """Format raw stdio configuration."""
+        server_config = {
+            "type": "stdio",
+            "command": raw["command"],
+            "args": raw["args"],
+        }
+        input_vars = []
+        if raw.get("env"):
+            # Translate bare ${VAR} -> ${env:VAR} so VS Code's runtime env
+            # interpolation resolves them at server-start. ${input:...}
+            # references are preserved for input-variable extraction below.
+            self._warn_on_legacy_angle_vars(raw["env"], server_info.get("name", "unknown"), "env")
+            env_translated = self._translate_env_vars_for_vscode(raw["env"])
+            server_config["env"] = env_translated
+            input_vars.extend(
+                self._extract_input_variables(env_translated, server_info.get("name", ""))
             )
-            if env_vars:
-                server_config["env"] = {}
-                for env_var in env_vars:
-                    if "name" in env_var:
-                        # Convert variable name to lowercase and replace underscores with hyphens for VS Code convention
-                        input_var_name = env_var["name"].lower().replace("_", "-")
-
-                        # Create the input variable reference
-                        server_config["env"][env_var["name"]] = f"${{input:{input_var_name}}}"
-
-                        # Create the input variable definition
-                        input_var_def = {
-                            "type": "promptString",
-                            "id": input_var_name,
-                            "description": env_var.get(
-                                "description", f"{env_var['name']} for MCP server"
-                            ),
-                            "password": True,  # Default to True for security
-                        }
-                        input_vars.append(input_var_def)
-
-        # If no server config was created from packages, check for other server types
-        if not server_config:
-            # Check for SSE endpoints
-            if "sse_endpoint" in server_info:
-                server_config = {
-                    "type": "sse",
-                    "url": server_info["sse_endpoint"],
-                    "headers": server_info.get("sse_headers", {}),
-                }
-            # Check for remotes (similar to Copilot adapter)
-            elif server_info.get("remotes"):
-                remote = self._select_remote_with_url(server_info["remotes"])
-                if remote:
-                    transport = (remote.get("transport_type") or "").strip()
-                    # Default to "http" when transport_type is missing/empty,
-                    # matching the Copilot adapter behavior (copilot.py:190-192).
-                    if not transport:
-                        transport = "http"
-                    elif transport not in ("sse", "http", "streamable-http"):
-                        raise ValueError(
-                            f"Unsupported remote transport '{transport}' for VS Code. "
-                            f"Server: {server_info.get('name', 'unknown')}. "
-                            f"Supported transports: http, sse, streamable-http."
-                        )
-                    headers = remote.get("headers", {})
-                    # Normalize header list format to dict
-                    if isinstance(headers, list):
-                        headers = {
-                            h["name"]: h["value"] for h in headers if "name" in h and "value" in h
-                        }
-                    # Translate bare ${VAR} -> ${env:VAR} so VS Code resolves
-                    # them from the host environment at runtime, instead of
-                    # sending the literal placeholder as the header value.
-                    self._warn_on_legacy_angle_vars(
-                        headers, server_info.get("name", "unknown"), "headers"
-                    )
-                    headers = self._translate_env_vars_for_vscode(headers)
-                    server_config = {
-                        "type": transport,
-                        "url": remote["url"].strip(),
-                        "headers": headers,
-                    }
-                    input_vars.extend(
-                        self._extract_input_variables(headers, server_info.get("name", ""))
-                    )
-            # If no packages AND no endpoints/remotes, fail with clear error
-            else:
-                packages = server_info.get("packages", [])
-                if packages:
-                    inferred = [
-                        self._infer_registry_name(p) or p.get("name", "unknown") for p in packages
-                    ]
-                    raise ValueError(
-                        f"No supported transport for VS Code runtime. "
-                        f"Server '{server_info.get('name', 'unknown')}' provides stdio packages "
-                        f"({', '.join(inferred)}) but none could be mapped to a VS Code configuration. "
-                        f"Supported package types: npm, pypi, docker."
-                    )
-                raise ValueError(
-                    f"MCP server has incomplete configuration in registry - no package information or remote endpoints available. "
-                    f"Server: {server_info.get('name', 'unknown')}"
-                )
-
         return server_config, input_vars
 
-    @staticmethod
-    def _translate_env_vars_for_vscode(mapping):
-        """Normalize ``${VAR}`` and ``${env:VAR}`` references to ``${env:VAR}``.
+    def _format_package_config(self, server_info):
+        """Format package-based server configuration."""
+        package = self._select_best_package(server_info["packages"])
+        if package is None:
+            return self._handle_incomplete_config(server_info)
 
-        VS Code's mcp.json natively resolves ``${env:VAR}`` from the host
-        environment at server-start time. Bare ``${VAR}`` is *not* part of the
-        mcp.json grammar, so VS Code would otherwise pass the literal text
-        through (silently breaking auth headers, env vars, etc.).
+        runtime_hint = package.get("runtime_hint", "")
+        registry_name = self._infer_registry_name(package)
+        pkg_args = self._extract_package_args(package)
 
-        This translation is purely textual and idempotent:
-        - ``${VAR}``      -> ``${env:VAR}``
-        - ``${env:VAR}``  -> ``${env:VAR}`` (no change)
-        - ``${input:X}``  -> ``${input:X}`` (no change; handled separately)
-        - non-string values pass through
+        server_config = self._build_package_server_config(
+            package, runtime_hint, registry_name, pkg_args
+        )
+        if not server_config:
+            return self._handle_incomplete_config(server_info)
 
-        A new dict is returned so callers may continue to use the original
-        for input-variable extraction without ordering concerns.
-        """
-        if not mapping:
-            return mapping
-        return {
-            k: (_ENV_VAR_RE.sub(r"${env:\1}", v) if isinstance(v, str) else v)
-            for k, v in mapping.items()
-        }
+        input_vars = self._build_package_input_vars(package, server_config)
+        return server_config, input_vars
 
-    @staticmethod
-    def _warn_on_legacy_angle_vars(mapping, server_name, field):
-        """Emit a warning when legacy ``<VAR>`` placeholders appear in *mapping*.
+    def _build_package_server_config(self, package, runtime_hint, registry_name, pkg_args):
+        """Build server configuration for a package."""
+        # Handle npm packages
+        if runtime_hint == "npx" or registry_name == "npm":
+            package_name = package.get("name")
+            extra_args = [a for a in pkg_args if a != package_name] if pkg_args else []
+            return {
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", package_name, *extra_args],
+            }
 
-        VS Code does not resolve ``<VAR>`` placeholders, so they would render
-        as literal ``<VAR>`` text in the generated mcp.json -- silently
-        breaking auth headers / env values at server-start. Surface this as
-        an explicit warning so authors can switch to the cross-harness
-        ``${VAR}`` / ``${env:VAR}`` syntax (see manifest-schema reference).
-        """
-        if not mapping:
-            return
-        offenders = []
-        for value in mapping.values():
-            if isinstance(value, str):
-                offenders.extend(_LEGACY_ANGLE_VAR_RE.findall(value))
-        if offenders:
-            unique = sorted(set(offenders))
-            _rich_warning(
-                f"Server '{server_name}' {field} use legacy <VAR> placeholder(s) "
-                f"({', '.join('<' + n + '>' for n in unique)}) which VS Code "
-                f"cannot resolve. Use ${{VAR}} or ${{env:VAR}} instead so the "
-                f"value resolves at runtime."
+        # Handle docker packages
+        if runtime_hint == "docker" or registry_name == "docker":
+            args = pkg_args if pkg_args else ["run", "-i", "--rm", package.get("name")]
+            return {"type": "stdio", "command": "docker", "args": args}
+
+        # Handle Python packages
+        if (
+            runtime_hint in ["uvx", "pip", "python"]
+            or "python" in runtime_hint
+            or registry_name == "pypi"
+        ):
+            command, args = self._build_python_command_args(package, runtime_hint, pkg_args)
+            return {"type": "stdio", "command": command, "args": args}
+
+        # Generic fallback for packages with a runtime_hint
+        if package and runtime_hint:
+            args = pkg_args if pkg_args else [package.get("name", "")]
+            return {"type": "stdio", "command": runtime_hint, "args": args}
+
+        return {}
+
+    def _format_remote_config(self, server_info):
+        """Format remote server configuration."""
+        # Check for SSE endpoints
+        if "sse_endpoint" in server_info:
+            server_config = {
+                "type": "sse",
+                "url": server_info["sse_endpoint"],
+                "headers": server_info.get("sse_headers", {}),
+            }
+            return server_config, []
+
+        # Check for remotes
+        if server_info.get("remotes"):
+            return self._format_remote_endpoint_config(server_info)
+
+        # No packages AND no endpoints/remotes
+        return self._handle_incomplete_config(server_info)
+
+    def _format_remote_endpoint_config(self, server_info):
+        """Format configuration for remote endpoint."""
+        remote = self._select_remote_with_url(server_info["remotes"])
+        if not remote:
+            return self._handle_incomplete_config(server_info)
+
+        transport = (remote.get("transport_type") or "").strip()
+        if not transport:
+            transport = "http"
+        elif transport not in ("sse", "http", "streamable-http"):
+            raise ValueError(
+                f"Unsupported remote transport '{transport}' for VS Code. "
+                f"Server: {server_info.get('name', 'unknown')}. "
+                f"Supported transports: http, sse, streamable-http."
             )
+
+        headers = remote.get("headers", {})
+        if isinstance(headers, list):
+            headers = {h["name"]: h["value"] for h in headers if "name" in h and "value" in h}
+
+        self._warn_on_legacy_angle_vars(headers, server_info.get("name", "unknown"), "headers")
+        headers = self._translate_env_vars_for_vscode(headers)
+
+        server_config = {
+            "type": transport,
+            "url": remote["url"].strip(),
+            "headers": headers,
+        }
+        input_vars = self._extract_input_variables(headers, server_info.get("name", ""))
+        return server_config, input_vars
+
+    def _handle_incomplete_config(self, server_info):
+        """Handle error case for incomplete server configuration."""
+        packages = server_info.get("packages", [])
+        if packages:
+            inferred = [self._infer_registry_name(p) or p.get("name", "unknown") for p in packages]
+            raise ValueError(
+                f"No supported transport for VS Code runtime. "
+                f"Server '{server_info.get('name', 'unknown')}' provides stdio packages "
+                f"({', '.join(inferred)}) but none could be mapped to a VS Code configuration. "
+                f"Supported package types: npm, pypi, docker."
+            )
+        raise ValueError(
+            f"MCP server has incomplete configuration in registry - no package information or remote endpoints available. "
+            f"Server: {server_info.get('name', 'unknown')}"
+        )
 
     def _extract_input_variables(self, mapping, server_name):
         """Scan dict values for ${input:...} references and return input variable definitions.
@@ -493,62 +453,6 @@ class VSCodeClientAdapter(MCPClientAdapter):
                     }
                 )
         return result
-
-    @staticmethod
-    def _extract_package_args(package):
-        """Extract positional arguments from a package entry.
-
-        The MCP registry API uses ``package_arguments`` (with ``type``/``value``
-        pairs).  Older or synthetic entries may use ``runtime_arguments``
-        (with ``is_required``/``value_hint``).  This method normalises both
-        formats into a flat list of argument strings.
-
-        Args:
-            package (dict): A single package entry.
-
-        Returns:
-            list[str]: Ordered argument strings, may be empty.
-        """
-        if not package:
-            return []
-
-        # Prefer package_arguments (current API format)
-        pkg_args = package.get("package_arguments") or []
-        if pkg_args:
-            args = []
-            for arg in pkg_args:
-                if isinstance(arg, dict):
-                    value = arg.get("value", "")
-                    if value:
-                        args.append(value)
-            if args:
-                return args
-
-        # Fall back to runtime_arguments (legacy / synthetic format)
-        rt_args = package.get("runtime_arguments") or []
-        if rt_args:
-            args = []
-            for arg in rt_args:
-                if isinstance(arg, dict):
-                    if arg.get("is_required", False) and arg.get("value_hint"):
-                        args.append(arg["value_hint"])
-            if args:
-                return args
-
-        return []
-
-    @staticmethod
-    def _select_remote_with_url(remotes):
-        """Return the first remote entry that has a non-empty URL.
-
-        Returns:
-            dict or None: The first usable remote, or None if none found.
-        """
-        for remote in remotes:
-            url = (remote.get("url") or "").strip()
-            if url:
-                return remote
-        return None
 
     def _select_best_package(self, packages):
         """Select the best package for VS Code installation from available packages.

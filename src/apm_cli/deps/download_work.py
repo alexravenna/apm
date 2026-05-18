@@ -120,6 +120,58 @@ def expand_parent_repo_decl(
     )
 
 
+def _load_from_install_path(
+    self,
+    dep_ref: DependencyReference,
+    install_path: Path,
+    parent_pkg: APMPackage | None,
+) -> APMPackage | None:
+    """Load an APMPackage from an already-located *install_path*.
+
+    Covers four outcomes in priority order:
+    1. No ``apm.yml`` but ``SKILL.md`` present -- return a minimal package.
+    2. No ``apm.yml`` and no ``SKILL.md`` -- return None.
+    3. ``apm.yml`` found -- parse and return the package.
+    4. ``FileNotFoundError`` during parse -- return None (re-raises ValueError).
+    """
+    # Look for apm.yml in the install path
+    apm_yml_path = install_path / "apm.yml"
+    if not apm_yml_path.exists():
+        # Package exists but has no apm.yml (e.g., Claude Skill)
+        # Check for SKILL.md and create minimal package
+        skill_md_path = install_path / "SKILL.md"
+        if skill_md_path.exists():
+            # Claude Skill without apm.yml - no transitive deps
+            return APMPackage(
+                name=dep_ref.get_display_name(),
+                version="1.0.0",
+                source=dep_ref.repo_url,
+                package_path=install_path,
+                source_path=self._compute_dep_source_path(dep_ref, parent_pkg, install_path),
+            )
+        # No manifest found
+        return None
+
+    # Load and return the package, anchoring relative ``local_path`` deps
+    # on the declaring package's source dir (#857). For local deps this
+    # is the *original* user source; for remote deps it is the clone in
+    # apm_modules.
+    dep_source_path = self._compute_dep_source_path(dep_ref, parent_pkg, install_path)
+    try:
+        package = APMPackage.from_apm_yml(apm_yml_path, source_path=dep_source_path)
+        # Ensure source is set for tracking. TODO(#940): the cache key
+        # already considers source_path; this post-construction mutation
+        # of ``source`` (a separate field) is safe today but has the same
+        # shape as the bug we just fixed -- review when refactoring.
+        if not package.source:
+            package.source = dep_ref.repo_url
+        return package
+    except FileNotFoundError:
+        return None
+    except ValueError:
+        raise
+
+
 def _try_load_dependency_package(
     self,
     dep_ref: DependencyReference,
@@ -268,39 +320,5 @@ def _try_load_dependency_package(
         if not install_path.exists():
             return None
 
-    # Look for apm.yml in the install path
-    apm_yml_path = install_path / "apm.yml"
-    if not apm_yml_path.exists():
-        # Package exists but has no apm.yml (e.g., Claude Skill)
-        # Check for SKILL.md and create minimal package
-        skill_md_path = install_path / "SKILL.md"
-        if skill_md_path.exists():
-            # Claude Skill without apm.yml - no transitive deps
-            return APMPackage(
-                name=dep_ref.get_display_name(),
-                version="1.0.0",
-                source=dep_ref.repo_url,
-                package_path=install_path,
-                source_path=self._compute_dep_source_path(dep_ref, parent_pkg, install_path),
-            )
-        # No manifest found
-        return None
-
-    # Load and return the package, anchoring relative ``local_path`` deps
-    # on the declaring package's source dir (#857). For local deps this
-    # is the *original* user source; for remote deps it is the clone in
-    # apm_modules.
-    dep_source_path = self._compute_dep_source_path(dep_ref, parent_pkg, install_path)
-    try:
-        package = APMPackage.from_apm_yml(apm_yml_path, source_path=dep_source_path)
-        # Ensure source is set for tracking. TODO(#940): the cache key
-        # already considers source_path; this post-construction mutation
-        # of ``source`` (a separate field) is safe today but has the same
-        # shape as the bug we just fixed -- review when refactoring.
-        if not package.source:
-            package.source = dep_ref.repo_url
-        return package
-    except FileNotFoundError:
-        return None
-    except ValueError:
-        raise
+    # Look for apm.yml in the install path -- delegate to helper
+    return _load_from_install_path(self, dep_ref, install_path, parent_pkg)

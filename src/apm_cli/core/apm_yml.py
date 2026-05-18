@@ -43,6 +43,31 @@ def _validate_canonical(tokens: list[str]) -> None:
             raise UnknownTargetError(render_unknown_target_error(token, sorted(CANONICAL_TARGETS)))
 
 
+def _parse_target_field(raw: object) -> list[str]:
+    """Parse the singular ``target:`` value into a list of target strings.
+
+    Handles None (returns empty list), YAML list sugar, and CSV strings.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        # YAML list sugar: 'target: [claude, copilot]' or block list.
+        # Empty list under singular key falls through to auto-detect
+        # (consistent with 'target:' with no value).
+        tokens = [str(t).strip() for t in raw if str(t).strip()]
+        if not tokens:
+            return []
+        _validate_canonical(tokens)
+        return tokens
+    raw_str = str(raw).strip()
+    if not raw_str:
+        return []
+    # CSV sugar: "claude,copilot" -> ['claude', 'copilot']
+    tokens = [t.strip() for t in raw_str.split(",") if t.strip()]
+    _validate_canonical(tokens)
+    return tokens
+
+
 def parse_targets_field(yaml_data: dict) -> list[str]:
     """Parse targets/target from raw apm.yml data dict.
 
@@ -83,25 +108,7 @@ def parse_targets_field(yaml_data: dict) -> list[str]:
         return tokens
 
     if has_target:
-        raw = yaml_data["target"]
-        if raw is None:
-            return []
-        if isinstance(raw, list):
-            # YAML list sugar: 'target: [claude, copilot]' or block list.
-            # Empty list under singular key falls through to auto-detect
-            # (consistent with 'target:' with no value).
-            tokens = [str(t).strip() for t in raw if str(t).strip()]
-            if not tokens:
-                return []
-            _validate_canonical(tokens)
-            return tokens
-        raw_str = str(raw).strip()
-        if not raw_str:
-            return []
-        # CSV sugar: "claude,copilot" -> ['claude', 'copilot']
-        tokens = [t.strip() for t in raw_str.split(",") if t.strip()]
-        _validate_canonical(tokens)
-        return tokens
+        return _parse_target_field(yaml_data["target"])
 
     # Neither key present
     return []

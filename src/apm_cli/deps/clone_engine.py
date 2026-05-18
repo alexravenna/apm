@@ -35,7 +35,7 @@ from ..utils.github_host import (
     is_ado_auth_failure_signal,
     is_github_hostname,
 )
-from .bare_cache import build_clone_failure_message
+from .bare_cache import CloneFailureContext, build_clone_failure_message
 from .transport_selection import TransportAttempt, TransportPlan
 
 if TYPE_CHECKING:
@@ -135,6 +135,57 @@ class CloneEngine:
     @property
     def _fallback_port_warned_lock(self):
         return self._host._fallback_port_warned_lock
+
+    def _try_ado_bearer_clone(
+        self,
+        repo_url_base: str,
+        dep_ref: DependencyReference | None,
+        dep_host: str | None,
+        clone_action: Callable[[str, dict[str, str], Path], None],
+        target_path: Path,
+        verbose_callback: object,
+    ) -> bool:
+        """Attempt ADO AAD-bearer fallback clone; return ``True`` on success.
+
+        Extracted from :meth:`execute` to reduce its McCabe complexity and
+        statement count within the configured Ruff thresholds.
+        """
+        try:
+            from apm_cli.core.azure_cli import (
+                AzureCliBearerError,
+                get_bearer_provider,
+            )
+            from apm_cli.utils.github_host import build_ado_bearer_git_env
+
+            provider = get_bearer_provider()
+            if not provider.is_available():
+                return False
+            try:
+                bearer = provider.get_bearer_token()
+                bearer_url = self._host._build_repo_url(
+                    repo_url_base,
+                    use_ssh=False,
+                    dep_ref=dep_ref,
+                    token=None,
+                    auth_scheme="bearer",
+                )
+                bearer_env = {
+                    **self._host.git_env,
+                    **build_ado_bearer_git_env(bearer),
+                }
+                clone_action(bearer_url, bearer_env, target_path)
+                self._host.auth_resolver.emit_stale_pat_diagnostic(dep_host or "dev.azure.com")
+                if verbose_callback:
+                    verbose_callback("Cloned from: (sanitized) via AAD bearer fallback")
+                return True
+            except (
+                AzureCliBearerError,
+                GitCommandError,
+                subprocess.CalledProcessError,
+            ):
+                return False
+        except ImportError:
+            return False
 
     def execute(
         self,
@@ -277,46 +328,10 @@ class CloneEngine:
                     and dep_auth_scheme == "basic"
                     and has_token
                     and is_ado_auth_failure_signal(err_msg)
+                ) and self._try_ado_bearer_clone(
+                    repo_url_base, dep_ref, dep_host, clone_action, target_path, verbose_callback
                 ):
-                    try:
-                        from apm_cli.core.azure_cli import (
-                            AzureCliBearerError,
-                            get_bearer_provider,
-                        )
-                        from apm_cli.utils.github_host import build_ado_bearer_git_env
-
-                        provider = get_bearer_provider()
-                        if provider.is_available():
-                            try:
-                                bearer = provider.get_bearer_token()
-                                bearer_url = host._build_repo_url(
-                                    repo_url_base,
-                                    use_ssh=False,
-                                    dep_ref=dep_ref,
-                                    token=None,
-                                    auth_scheme="bearer",
-                                )
-                                bearer_env = {
-                                    **host.git_env,
-                                    **build_ado_bearer_git_env(bearer),
-                                }
-                                clone_action(bearer_url, bearer_env, target_path)
-                                host.auth_resolver.emit_stale_pat_diagnostic(
-                                    dep_host or "dev.azure.com"
-                                )
-                                if verbose_callback:
-                                    verbose_callback(
-                                        "Cloned from: (sanitized) via AAD bearer fallback"
-                                    )
-                                return
-                            except (
-                                AzureCliBearerError,
-                                GitCommandError,
-                                subprocess.CalledProcessError,
-                            ):
-                                pass
-                    except ImportError:
-                        pass
+                    return
                 last_error = e
                 prev_label = attempt.label
                 prev_scheme = attempt.scheme
@@ -324,19 +339,21 @@ class CloneEngine:
                     break
 
         error_msg = build_clone_failure_message(
-            repo_url_base=repo_url_base,
-            plan=plan,
-            dep_ref=dep_ref,
-            dep_host=dep_host,
-            is_ado=bool(is_ado),
-            is_generic=is_generic,
-            has_ado_token=host.has_ado_token,
-            has_token=has_token,
-            auth_resolver=host.auth_resolver,
-            configured_github_host=os.environ.get("GITHUB_HOST", ""),
-            default_host_fn=default_host,
-            last_error=last_error,
-            sanitize_git_error=host._sanitize_git_error,
+            CloneFailureContext(
+                repo_url_base=repo_url_base,
+                plan=plan,
+                dep_ref=dep_ref,
+                dep_host=dep_host,
+                is_ado=bool(is_ado),
+                is_generic=is_generic,
+                has_ado_token=host.has_ado_token,
+                has_token=has_token,
+                auth_resolver=host.auth_resolver,
+                configured_github_host=os.environ.get("GITHUB_HOST", ""),
+                default_host_fn=default_host,
+                last_error=last_error,
+                sanitize_git_error=host._sanitize_git_error,
+            )
         )
 
         raise RuntimeError(error_msg)

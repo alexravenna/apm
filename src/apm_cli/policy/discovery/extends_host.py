@@ -39,12 +39,10 @@ def _extract_extends_host(ref: str) -> str | None:
         return None
     if ref.startswith("http://") or ref.startswith("https://"):
         try:
-            parsed = urlparse(ref)
-            if parsed.hostname:
-                return parsed.hostname.lower()
+            hostname = urlparse(ref).hostname
         except Exception:
-            return None
-        return None
+            hostname = None
+        return hostname.lower() if hostname else None
     if "/" not in ref:
         return None
     parts = ref.split("/")

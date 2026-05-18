@@ -182,6 +182,22 @@ def _detect_garbage(
     return None  # Not garbage -- proceed with normal parsing
 
 
+def _verify_hash_pin(expected_hash: str | None, raw_bytes_hash: str) -> bool:
+    """Verify the cached entry's hash against the expected pin.
+
+    Returns True if the pin is satisfied (no pin, or pin matches).
+    Returns False if the pin format is invalid or the hashes differ.
+    """
+    if expected_hash is None:
+        return True
+    try:
+        exp_algo, exp_hex = _split_hash_pin(expected_hash)
+        expected_norm = f"{exp_algo}:{exp_hex}"
+    except ProjectPolicyConfigError:
+        return False
+    return raw_bytes_hash.lower() == expected_norm
+
+
 def _read_cache_entry(
     repo_ref: str,
     project_root: Path,
@@ -229,14 +245,8 @@ def _read_cache_entry(
         # cache was written without one (legacy entry) or with a different
         # one, ignore the cache so the fetcher can verify the pin against
         # fresh authoritative bytes.
-        if expected_hash is not None:
-            try:
-                exp_algo, exp_hex = _split_hash_pin(expected_hash)
-                expected_norm = f"{exp_algo}:{exp_hex}"
-            except ProjectPolicyConfigError:
-                return None
-            if raw_bytes_hash.lower() != expected_norm:
-                return None
+        if not _verify_hash_pin(expected_hash, raw_bytes_hash):
+            return None
 
         policy, _warnings = load_policy(policy_file)
 

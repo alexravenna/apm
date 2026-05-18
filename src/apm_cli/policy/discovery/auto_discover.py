@@ -95,6 +95,27 @@ def _extract_org_from_git_remote(
         return None
 
 
+def _parse_scp_url(scp_match: re.Match) -> tuple[str, str] | None:
+    """Decode an SCP-like SSH match into (org, host).
+
+    Returns None if the path component cannot be decoded or is empty.
+    """
+    host = scp_match.group("host")
+    path_part = scp_match.group("path")
+    try:
+        parts = path_part.rstrip("/").removesuffix(".git").split("/")
+        parts = [p for p in parts if p]
+        if not parts:
+            return None
+        # Azure DevOps SSH carries a leading 'v3/' segment that is
+        # NOT the org. The org is the second segment.
+        if host == "ssh.dev.azure.com" and parts[0] == "v3" and len(parts) >= 2:
+            return (parts[1], host)
+        return (parts[0], host)
+    except (ValueError, IndexError):
+        return None
+
+
 def _parse_remote_url(url: str) -> tuple[str, str] | None:
     """Parse a git remote URL into (org, host).
 
@@ -113,20 +134,7 @@ def _parse_remote_url(url: str) -> tuple[str, str] | None:
     # Closes #1159 for non-`git` SSH users (EMU, custom GHE accounts).
     scp_match = SCP_LIKE_RE.match(url)
     if scp_match:
-        host = scp_match.group("host")
-        path_part = scp_match.group("path")
-        try:
-            parts = path_part.rstrip("/").removesuffix(".git").split("/")
-            parts = [p for p in parts if p]
-            if not parts:
-                return None
-            # Azure DevOps SSH carries a leading 'v3/' segment that is
-            # NOT the org. The org is the second segment.
-            if host == "ssh.dev.azure.com" and parts[0] == "v3" and len(parts) >= 2:
-                return (parts[1], host)
-            return (parts[0], host)
-        except (ValueError, IndexError):
-            return None
+        return _parse_scp_url(scp_match)
 
     # HTTPS: https://github.com/owner/repo.git
     # ADO:   https://dev.azure.com/org/project/_git/repo

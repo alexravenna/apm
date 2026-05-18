@@ -22,6 +22,13 @@ from ....utils.path_security import (
 _DEFAULT_SCHEME_PORTS: dict[str, int] = {"https": 443, "http": 80, "ssh": 22}
 
 
+from ._object_form import (
+    _normalize_parent_repo_decl_path,
+    _parse_object_git_overrides,
+    _parse_object_local_path,
+    _parse_object_parent,
+    parse_from_dict,
+)
 from .core import DependencyReference
 
 
@@ -83,172 +90,6 @@ def _parse_ssh_protocol_url(url: str):
     validate_path_segments(repo_url, context="SSH repository path", reject_empty=True)
 
     return host, port, repo_url, reference, alias
-
-
-@staticmethod
-def _normalize_parent_repo_decl_path(raw: str) -> str:
-    """Normalize ``path`` for ``git: parent`` to a single canonical relative path."""
-    s = raw.strip().replace("\\", "/").strip()
-    s = s.strip("/")
-    segments = [seg for seg in s.split("/") if seg]
-    if not segments:
-        raise ValueError("'path' field must be a non-empty string")
-    normalized = "/".join(segments)
-    validate_path_segments(normalized, context="path")
-    return normalized
-
-
-@classmethod
-def parse_from_dict(cls, entry: dict) -> "DependencyReference":
-    """Parse an object-style dependency entry from apm.yml.
-
-    Supports the Cargo-inspired object format:
-
-        - git: https://gitlab.com/acme/coding-standards.git
-          path: instructions/security
-          ref: v2.0
-
-        - git: git@bitbucket.org:team/rules.git
-          path: prompts/review.prompt.md
-
-    Also supports local path entries:
-
-        - path: ./packages/my-shared-skills
-
-    Args:
-        entry: Dictionary with 'git' or 'path' (required), plus optional fields
-
-    Returns:
-        DependencyReference: Parsed dependency reference
-
-    Raises:
-        ValueError: If the entry is missing required fields or has invalid format
-    """
-    # Support dict-form local path: { path: ./local/dir }
-    if "path" in entry and "git" not in entry:
-        local = entry["path"]
-        if not isinstance(local, str) or not local.strip():
-            raise ValueError("'path' field must be a non-empty string")
-        local = local.strip()
-        if not cls.is_local_path(local):
-            raise ValueError(
-                "Object-style dependency must have a 'git' field, "
-                "or 'path' must be a local filesystem path "
-                "(starting with './', '../', '/', or '~')"
-            )
-        return cls.parse(local)
-
-    if "git" not in entry:
-        raise ValueError("Object-style dependency must have a 'git' or 'path' field")
-
-    git_url = entry["git"]
-    if not isinstance(git_url, str) or not git_url.strip():
-        raise ValueError("'git' field must be a non-empty string")
-
-    # Monorepo parent inheritance (literal ``git: parent`` only; resolver expands)
-    if git_url == "parent":
-        path_raw = entry.get("path")
-        if path_raw is None:
-            raise ValueError("Object-style dependency with git: 'parent' requires a 'path' field")
-        if not isinstance(path_raw, str) or not path_raw.strip():
-            raise ValueError("'path' field must be a non-empty string")
-        normalized_path = cls._normalize_parent_repo_decl_path(path_raw)
-
-        ref_override = entry.get("ref")
-        alias_override = entry.get("alias")
-        reference: str | None = None
-        if ref_override is not None:
-            if not isinstance(ref_override, str) or not ref_override.strip():
-                raise ValueError("'ref' field must be a non-empty string")
-            reference = ref_override.strip()
-
-        alias_val: str | None = None
-        if alias_override is not None:
-            if not isinstance(alias_override, str) or not alias_override.strip():
-                raise ValueError("'alias' field must be a non-empty string")
-            alias_override = alias_override.strip()
-            if not re.match(r"^[a-zA-Z0-9._-]+$", alias_override):
-                raise ValueError(
-                    f"Invalid alias: {alias_override}. Aliases can only contain letters, numbers, dots, underscores, and hyphens"
-                )
-            alias_val = alias_override
-
-        return cls(
-            repo_url="_parent",
-            host=None,
-            reference=reference,
-            alias=alias_val,
-            virtual_path=normalized_path,
-            is_virtual=True,
-            is_parent_repo_inheritance=True,
-        )
-
-    sub_path = entry.get("path")
-    ref_override = entry.get("ref")
-    alias_override = entry.get("alias")
-    allow_insecure = entry.get("allow_insecure", False)
-    if not isinstance(allow_insecure, bool):
-        raise ValueError("'allow_insecure' field must be a boolean")
-
-    # Validate sub_path if provided
-    if sub_path is not None:
-        if not isinstance(sub_path, str) or not sub_path.strip():
-            raise ValueError("'path' field must be a non-empty string")
-        sub_path = sub_path.strip().strip("/")
-        # Normalize backslashes to forward slashes for cross-platform safety
-        sub_path = sub_path.replace("\\", "/").strip().strip("/")
-        # Security: reject path traversal
-        validate_path_segments(sub_path, context="path")
-
-    # Parse the git URL using the standard parser
-    dep = cls.parse(git_url)
-    dep.allow_insecure = allow_insecure
-
-    # Apply overrides from the object fields
-    if ref_override is not None:
-        if not isinstance(ref_override, str) or not ref_override.strip():
-            raise ValueError("'ref' field must be a non-empty string")
-        dep.reference = ref_override.strip()
-
-    if alias_override is not None:
-        if not isinstance(alias_override, str) or not alias_override.strip():
-            raise ValueError("'alias' field must be a non-empty string")
-        alias_override = alias_override.strip()
-        if not re.match(r"^[a-zA-Z0-9._-]+$", alias_override):
-            raise ValueError(
-                f"Invalid alias: {alias_override}. Aliases can only contain letters, numbers, dots, underscores, and hyphens"
-            )
-        dep.alias = alias_override
-
-    # Apply sub-path as virtual package
-    if sub_path:
-        dep.virtual_path = sub_path
-        dep.is_virtual = True
-
-    # Parse skills: field (SKILL_BUNDLE subset selection)
-    skills_raw = entry.get("skills")
-    if skills_raw is not None:
-        if not isinstance(skills_raw, (list,)):
-            raise ValueError("'skills' field must be a list of skill names")
-        if len(skills_raw) == 0:
-            raise ValueError(
-                "skills: must contain at least one name; "
-                "remove the field to install all skills in the bundle."
-            )
-        seen: set = set()
-        validated: list = []
-        for name in skills_raw:
-            if not isinstance(name, str) or not name.strip():
-                raise ValueError("Each entry in 'skills' must be a non-empty string")
-            name = name.strip()
-            # Path safety: reject traversal sequences
-            validate_path_segments(name, context="skills/<name>")
-            if name not in seen:
-                seen.add(name)
-                validated.append(name)
-        dep.skill_subset = sorted(validated)
-
-    return dep
 
 
 @staticmethod

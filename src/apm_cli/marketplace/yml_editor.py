@@ -13,6 +13,7 @@ atomic-write-then-revalidate pattern:
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from io import StringIO
 from pathlib import Path
 
@@ -28,10 +29,25 @@ from .yml_schema import (
 )
 
 __all__ = [
+    "PluginEntrySpec",
     "add_plugin_entry",
     "remove_plugin_entry",
     "update_plugin_entry",
 ]
+
+
+@dataclass
+class PluginEntrySpec:
+    """Parameters for adding a plugin entry to a marketplace YAML file."""
+
+    source: str
+    name: str | None = None
+    version: str | None = None
+    ref: str | None = None
+    subdir: str | None = None
+    tag_pattern: str | None = None
+    tags: list[str] | None = field(default=None)
+    include_prerelease: bool = False
 
 
 # -------------------------------------------------------------------
@@ -156,20 +172,34 @@ def _validate_subdir(subdir: str) -> None:
 
 def add_plugin_entry(
     yml_path: Path,
-    *,
-    source: str,
-    name: str | None = None,
-    version: str | None = None,
-    ref: str | None = None,
-    subdir: str | None = None,
-    tag_pattern: str | None = None,
-    tags: list[str] | None = None,
-    include_prerelease: bool = False,
+    spec: PluginEntrySpec | None = None,
+    **kwargs,
 ) -> str:
     """Append a new entry to ``packages[]``.
 
     Returns the resolved package name.
     """
+    if spec is not None:
+        source = spec.source
+        name = spec.name
+        version = spec.version
+        ref = spec.ref
+        subdir = spec.subdir
+        tag_pattern = spec.tag_pattern
+        tags = spec.tags
+        include_prerelease = spec.include_prerelease
+    else:
+        source = kwargs.get("source")
+        name = kwargs.get("name")
+        version = kwargs.get("version")
+        ref = kwargs.get("ref")
+        subdir = kwargs.get("subdir")
+        tag_pattern = kwargs.get("tag_pattern")
+        tags = kwargs.get("tags")
+        include_prerelease = kwargs.get("include_prerelease", False)
+
+    if source is None:
+        raise MarketplaceYmlError("'source' is required")
     # --- input validation ---
     _validate_source(source)
 

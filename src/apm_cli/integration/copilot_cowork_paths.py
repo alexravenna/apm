@@ -148,10 +148,7 @@ def resolve_copilot_cowork_skills_dir() -> Path | None:
 
     # --- macOS auto-detection ---
     cloud_storage = Path.home() / "Library" / "CloudStorage"
-    if not cloud_storage.is_dir():
-        return None
-
-    candidates = sorted(cloud_storage.glob(_ONEDRIVE_GLOB))
+    candidates = sorted(cloud_storage.glob(_ONEDRIVE_GLOB)) if cloud_storage.is_dir() else []
     if not candidates:
         return None
 

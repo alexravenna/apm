@@ -3,69 +3,41 @@
 This module implements hierarchical directory-based distribution to generate multiple
 AGENTS.md files across a project's directory structure, following the AGENTS.md standard
 for nested agent context files.
+
+Data models live in ``_dc_models``, orphan-management helpers in ``_dc_orphans``, and
+content-generation / stats helpers in ``_dc_content``.  All public names are re-exported
+from this module so external imports remain unchanged.
 """
 
 import builtins
 from collections import defaultdict
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..output.formatters import CompilationFormatter
 from ..output.models import CompilationResults
 from ..primitives.models import Instruction, PrimitiveCollection
-from ..utils.paths import portable_relpath
-from ..version import get_version
-from .constants import BUILD_ID_PLACEHOLDER
+from ._dc_content import compile_distributed_stats, generate_agents_content, validate_coverage
+from ._dc_models import CompilationResult, DirectoryMap, PlacementResult
+from ._dc_orphans import (
+    cleanup_orphaned_files,
+    find_orphaned_agents_files,
+    generate_orphan_warnings,
+)
 from .context_optimizer import ContextOptimizer
 from .link_resolver import UnifiedLinkResolver
-from .template_builder import (
-    render_instructions_block,
-)
 
 # CRITICAL: Shadow Click commands to prevent namespace collision
 set = builtins.set
 list = builtins.list
 dict = builtins.dict
 
-
-@dataclass
-class DirectoryMap:
-    """Mapping of directory structure analysis."""
-
-    directories: builtins.dict[
-        Path, builtins.set[str]
-    ]  # directory -> set of applicable file patterns
-    depth_map: builtins.dict[Path, int]  # directory -> depth level
-    parent_map: builtins.dict[Path, Path | None]  # directory -> parent directory
-
-    def get_max_depth(self) -> int:
-        """Get maximum depth in the directory structure."""
-        return max(self.depth_map.values()) if self.depth_map else 0
-
-
-@dataclass
-class PlacementResult:
-    """Result of AGENTS.md placement analysis."""
-
-    agents_path: Path
-    instructions: builtins.list[Instruction]
-    inherited_instructions: builtins.list[Instruction] = field(default_factory=list)
-    coverage_patterns: builtins.set[str] = field(default_factory=set)
-    source_attribution: builtins.dict[str, str] = field(
-        default_factory=dict
-    )  # instruction_id -> source
-
-
-@dataclass
-class CompilationResult:
-    """Result of distributed AGENTS.md compilation."""
-
-    success: bool
-    placements: builtins.list[PlacementResult]
-    content_map: builtins.dict[Path, str]  # agents_path -> content
-    warnings: builtins.list[str] = field(default_factory=list)
-    errors: builtins.list[str] = field(default_factory=list)
-    stats: builtins.dict[str, float] = field(default_factory=dict)  # Support optimization metrics
+# Re-export public names so callers importing from this module are unaffected.
+__all__ = [
+    "CompilationResult",
+    "DirectoryMap",
+    "DistributedAgentsCompiler",
+    "PlacementResult",
+]
 
 
 class DistributedAgentsCompiler:
@@ -164,27 +136,29 @@ class DistributedAgentsCompiler:
 
             # Phase 4: Handle orphaned file cleanup
             generated_paths = [p.agents_path for p in placements]
-            orphaned_files = self._find_orphaned_agents_files(generated_paths)
+            orphaned_files = find_orphaned_agents_files(self.base_dir, generated_paths)
 
             if orphaned_files:
                 # Always show warnings about orphaned files
-                warning_messages = self._generate_orphan_warnings(orphaned_files)
+                warning_messages = generate_orphan_warnings(orphaned_files, self.base_dir)
                 if warning_messages:
                     self.warnings.extend(warning_messages)
 
                 # Only perform actual cleanup if not dry_run and clean_orphaned is True
                 if not dry_run and clean_orphaned:
-                    cleanup_messages = self._cleanup_orphaned_files(orphaned_files, dry_run=False)
+                    cleanup_messages = cleanup_orphaned_files(
+                        orphaned_files, self.base_dir, dry_run=False
+                    )
                     if cleanup_messages:
                         self.warnings.extend(cleanup_messages)
 
             # Phase 5: Validate coverage
-            coverage_validation = self._validate_coverage(placements, primitives.instructions)
+            coverage_validation = validate_coverage(placements, primitives.instructions)
             if coverage_validation:
                 self.warnings.extend(coverage_validation)
 
             # Compile statistics
-            stats = self._compile_distributed_stats(placements, primitives)
+            stats = compile_distributed_stats(placements, primitives, self.context_optimizer)
 
             # Optional: Get referenced contexts for reporting (doesn't copy)
             try:
@@ -205,7 +179,10 @@ class DistributedAgentsCompiler:
                 success=len(self.errors) == 0,
                 placements=placements,
                 content_map={
-                    p.agents_path: self._generate_agents_content(p, primitives) for p in placements
+                    p.agents_path: generate_agents_content(
+                        p, primitives, self.link_resolver, self.base_dir
+                    )
+                    for p in placements
                 },
                 warnings=self.warnings.copy(),
                 errors=self.errors.copy(),
@@ -504,251 +481,3 @@ class DistributedAgentsCompiler:
                     best_dir = dir_path
 
         return best_dir
-
-    def _generate_agents_content(
-        self, placement: PlacementResult, primitives: PrimitiveCollection
-    ) -> str:
-        """Generate AGENTS.md content for a specific placement.
-
-        Args:
-            placement (PlacementResult): Placement result with instructions.
-            primitives (PrimitiveCollection): Full primitive collection.
-
-        Returns:
-            str: Generated AGENTS.md content.
-        """
-        sections = []
-
-        # Header with source attribution
-        sections.append("# AGENTS.md")
-        sections.append("<!-- Generated by APM CLI from distributed .apm/ primitives -->")
-        sections.append(BUILD_ID_PLACEHOLDER)
-        sections.append(f"<!-- APM Version: {get_version()} -->")
-
-        # Add source attribution summary if enabled
-        if placement.source_attribution:
-            sources = set(placement.source_attribution.values())
-            if len(sources) > 1:
-                sections.append(f"<!-- Sources: {', '.join(sorted(sources))} -->")
-            else:
-                sections.append(f"<!-- Source: {list(sources)[0] if sources else 'local'} -->")
-
-        sections.append("")
-
-        sections.extend(
-            build_attributed_instructions(
-                placement.instructions,
-                placement.source_attribution,
-                self.base_dir,
-            )
-        )
-
-        # Footer
-        sections.append("---")
-        sections.append("*This file was generated by APM CLI. Do not edit manually.*")
-        sections.append("*To regenerate: `apm compile`*")
-        sections.append("")
-
-        content = "\n".join(sections)
-
-        # Resolve context links in the generated content
-        content = self.link_resolver.resolve_links_for_compilation(
-            content=content,
-            source_file=placement.agents_path.parent,
-            compiled_output=placement.agents_path,
-        )
-
-        return content
-
-    def _validate_coverage(
-        self,
-        placements: builtins.list[PlacementResult],
-        all_instructions: builtins.list[Instruction],
-    ) -> builtins.list[str]:
-        """Validate that all instructions are covered by placements.
-
-        Args:
-            placements (List[PlacementResult]): Generated placements.
-            all_instructions (List[Instruction]): All available instructions.
-
-        Returns:
-            List[str]: List of coverage warnings.
-        """
-        warnings = []
-        placed_instructions = set()
-
-        for placement in placements:
-            placed_instructions.update(str(inst.file_path) for inst in placement.instructions)
-
-        all_instruction_paths = set(str(inst.file_path) for inst in all_instructions)
-
-        missing_instructions = all_instruction_paths - placed_instructions
-        if missing_instructions:
-            warnings.append(
-                f"Instructions not placed in any AGENTS.md: {', '.join(missing_instructions)}"
-            )
-
-        return warnings
-
-    def _find_orphaned_agents_files(
-        self, generated_paths: builtins.list[Path]
-    ) -> builtins.list[Path]:
-        """Find existing AGENTS.md files that weren't generated in the current compilation.
-
-        Args:
-            generated_paths (List[Path]): List of AGENTS.md files generated in current run.
-
-        Returns:
-            List[Path]: List of orphaned AGENTS.md files that should be cleaned up.
-        """
-        orphaned_files = []
-        generated_set = set(generated_paths)
-
-        # Find all existing AGENTS.md files in the project
-        for agents_file in self.base_dir.rglob("AGENTS.md"):
-            # Skip files that are outside our project or in special directories
-            try:
-                relative_path = agents_file.resolve().relative_to(self.base_dir.resolve())
-
-                # Skip files in certain directories that shouldn't be cleaned
-                skip_dirs = {
-                    ".git",
-                    ".apm",
-                    "node_modules",
-                    "__pycache__",
-                    ".pytest_cache",
-                    "apm_modules",
-                }
-                if any(part in skip_dirs for part in relative_path.parts):
-                    continue
-
-                # If this existing file wasn't generated in current run, it's orphaned
-                if agents_file not in generated_set:
-                    orphaned_files.append(agents_file)
-
-            except ValueError:
-                # File is outside base_dir, skip it
-                continue
-
-        return orphaned_files
-
-    def _generate_orphan_warnings(self, orphaned_files: builtins.list[Path]) -> builtins.list[str]:
-        """Generate warning messages for orphaned AGENTS.md files.
-
-        Args:
-            orphaned_files (List[Path]): List of orphaned files to warn about.
-
-        Returns:
-            List[str]: List of warning messages.
-        """
-        warning_messages = []
-
-        if not orphaned_files:
-            return warning_messages
-
-        # Professional warning format with readable list for multiple files
-        if len(orphaned_files) == 1:
-            rel_path = portable_relpath(orphaned_files[0], self.base_dir)
-            warning_messages.append(
-                f"Orphaned AGENTS.md found: {rel_path} - run 'apm compile --clean' to remove"
-            )
-        else:
-            # For multiple files, create a single multi-line warning message
-            file_list = []
-            for file_path in orphaned_files[:5]:  # Show first 5
-                rel_path = portable_relpath(file_path, self.base_dir)
-                file_list.append(f"  * {rel_path}")
-            if len(orphaned_files) > 5:
-                file_list.append(f"  * ...and {len(orphaned_files) - 5} more")
-
-            # Create one cohesive warning message
-            files_text = "\n".join(file_list)
-            warning_messages.append(
-                f"Found {len(orphaned_files)} orphaned AGENTS.md files:\n{files_text}\n  Run 'apm compile --clean' to remove orphaned files"
-            )
-
-        return warning_messages
-
-    def _cleanup_orphaned_files(
-        self, orphaned_files: builtins.list[Path], dry_run: bool = False
-    ) -> builtins.list[str]:
-        """Actually remove orphaned AGENTS.md files.
-
-        Args:
-            orphaned_files (List[Path]): List of orphaned files to remove.
-            dry_run (bool): If True, don't actually remove files, just report what would be removed.
-
-        Returns:
-            List[str]: List of cleanup status messages.
-        """
-        cleanup_messages = []
-
-        if not orphaned_files:
-            return cleanup_messages
-
-        if dry_run:
-            # In dry-run mode, just report what would be cleaned
-            cleanup_messages.append(
-                f"Would clean up {len(orphaned_files)} orphaned AGENTS.md files"
-            )
-            for file_path in orphaned_files:
-                rel_path = portable_relpath(file_path, self.base_dir)
-                cleanup_messages.append(f"  * {rel_path}")
-        else:
-            # Actually perform the cleanup
-            cleanup_messages.append(f"Cleaning up {len(orphaned_files)} orphaned AGENTS.md files")
-            for file_path in orphaned_files:
-                try:
-                    rel_path = portable_relpath(file_path, self.base_dir)
-                    file_path.unlink()
-                    cleanup_messages.append(f"  + Removed {rel_path}")
-                except Exception as e:
-                    cleanup_messages.append(f"  x Failed to remove {rel_path}: {e!s}")
-
-        return cleanup_messages
-
-    def _compile_distributed_stats(
-        self, placements: builtins.list[PlacementResult], primitives: PrimitiveCollection
-    ) -> builtins.dict[str, float]:
-        """Compile statistics about the distributed compilation with optimization metrics.
-
-        Args:
-            placements (List[PlacementResult]): Generated placements.
-            primitives (PrimitiveCollection): Full primitive collection.
-
-        Returns:
-            Dict[str, float]: Compilation statistics including optimization metrics.
-        """
-        total_instructions = sum(len(p.instructions) for p in placements)
-        total_patterns = sum(len(p.coverage_patterns) for p in placements)
-
-        # Get optimization metrics
-        placement_map = {Path(p.agents_path.parent): p.instructions for p in placements}
-        optimization_stats = self.context_optimizer.get_optimization_stats(placement_map)
-
-        # Combine traditional stats with optimization metrics
-        stats = {
-            "agents_files_generated": len(placements),
-            "total_instructions_placed": total_instructions,
-            "total_patterns_covered": total_patterns,
-            "primitives_found": primitives.count(),
-            "chatmodes": len(primitives.chatmodes),
-            "instructions": len(primitives.instructions),
-            "contexts": len(primitives.contexts),
-        }
-
-        # Add optimization metrics from OptimizationStats object
-        if optimization_stats:
-            stats.update(
-                {
-                    "average_context_efficiency": optimization_stats.average_context_efficiency,
-                    "pollution_improvement": optimization_stats.pollution_improvement,
-                    "baseline_efficiency": optimization_stats.baseline_efficiency,
-                    "placement_accuracy": optimization_stats.placement_accuracy,
-                    "generation_time_ms": optimization_stats.generation_time_ms,
-                    "total_agents_files": optimization_stats.total_agents_files,
-                    "directories_analyzed": optimization_stats.directories_analyzed,
-                }
-            )
-
-        return stats

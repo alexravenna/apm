@@ -7,8 +7,17 @@ from pathlib import Path
 
 from ..core.target_detection import detect_target
 from ..deps.lockfile import LockFile, get_lockfile_path, migrate_lockfile_if_needed
-from ..models.apm_package import APMPackage
+from ..security.gate import ignore_non_content
 from .lockfile_enrichment import _filter_files_by_target, enrich_lockfile_for_pack
+from .packer_helpers import (
+    collect_deployed_files,
+    copy_bundle_files,
+    scan_bundle_security,
+    validate_package_metadata,
+    verify_file_safety_and_existence,
+)
+
+_COPYTREE_IGNORE = ignore_non_content
 
 
 @dataclass
@@ -79,53 +88,9 @@ def pack_bundle(
     # 2. Read apm.yml for name / version / config target
     apm_yml_path = project_root / "apm.yml"
     skill_md_path = project_root / "SKILL.md"
-    is_hybrid_root = apm_yml_path.exists() and skill_md_path.exists()
-    try:
-        package = APMPackage.from_apm_yml(apm_yml_path)
-        pkg_name = package.name
-        pkg_version = package.version or "0.0.0"
-        config_target = package.target
-
-        # HYBRID author guard: apm.yml.description and SKILL.md
-        # description serve different consumers (human-facing CLI/search
-        # vs. agent-runtime invocation matcher) and are NOT merged. If
-        # the author shipped a SKILL.md description but left
-        # apm.yml.description blank, the human-facing surfaces (apm view,
-        # apm search, marketplace listings) will degrade silently while
-        # Claude/Copilot still invoke the skill correctly. Warn loudly
-        # at pack time -- this is the publish gate for the AUTHOR.
-        if is_hybrid_root and not package.description and logger:
-            try:
-                import frontmatter as _frontmatter
-
-                with open(skill_md_path, encoding="utf-8") as _f:
-                    _skill_post = _frontmatter.load(_f)
-                _skill_desc = _skill_post.metadata.get("description")
-            except Exception:
-                _skill_desc = None
-            if _skill_desc:
-                logger.warning(
-                    "apm.yml is missing 'description'. SKILL.md has its own "
-                    "description, but that is for agent invocation -- not "
-                    "for 'apm view' or search. Add a short tagline to "
-                    'apm.yml:  description: "One-line human summary"'
-                )
-
-        # Guard: reject local-path dependencies (non-portable)
-        for dep_ref in package.get_apm_dependencies():
-            if dep_ref.is_local:
-                raise ValueError(
-                    f"Cannot pack — apm.yml contains local path dependency: "
-                    f"{dep_ref.local_path}\n"
-                    f"Local dependencies are for development only. Replace them with "
-                    f"remote references (e.g., 'owner/repo') before packing."
-                )
-    except ValueError:
-        raise
-    except FileNotFoundError:
-        pkg_name = project_root.resolve().name
-        pkg_version = "0.0.0"
-        config_target = None
+    pkg_name, pkg_version, config_target = validate_package_metadata(
+        project_root, apm_yml_path, skill_md_path, logger
+    )
 
     # 3. Resolve effective target
     if isinstance(target, list):
@@ -145,15 +110,11 @@ def pack_bundle(
             effective_target = "all"
 
     # 4. Collect deployed_files from all dependencies, filtered by target.
-    #    Skip local-source entries: these include the synthesized root self-entry
+    #    Skip local-source entries: these include the synthesised root self-entry
     #    (local_path == ".") and any local-path manifest deps. Local content is
     #    not portable and is bundled separately via the project's own files
-    #    (or rejected outright at L89-97 for manifest-declared local deps).
-    all_deployed: list[str] = []
-    for dep in lockfile.get_all_dependencies():
-        if dep.source == "local":
-            continue
-        all_deployed.extend(dep.deployed_files)
+    #    (or rejected outright for manifest-declared local deps).
+    all_deployed = collect_deployed_files(lockfile)
 
     filtered_files, path_mappings = _filter_files_by_target(all_deployed, effective_target)
     # Deduplicate while preserving order
@@ -165,26 +126,7 @@ def pack_bundle(
             unique_files.append(f)
 
     # 5. Verify each path is safe (no traversal) and exists on disk
-    project_root_resolved = project_root.resolve()
-    missing: list[str] = []
-    for rel_path in unique_files:
-        # Guard against absolute paths or path-traversal entries in deployed_files
-        p = Path(rel_path)
-        if p.is_absolute() or ".." in p.parts:
-            raise ValueError(f"Refusing to pack unsafe path from lockfile: {rel_path!r}")
-        # For cross-target mapped files, verify the original (on-disk) path
-        disk_path = path_mappings.get(rel_path, rel_path)
-        abs_path = project_root / disk_path
-        if not abs_path.resolve().is_relative_to(project_root_resolved):
-            raise ValueError(f"Refusing to pack path that escapes project root: {disk_path!r}")
-        # deployed_files may reference directories (ending with /)
-        if not abs_path.exists():
-            missing.append(disk_path)
-    if missing:
-        raise ValueError(
-            "The following deployed files are missing on disk  -- "
-            "run 'apm install' to restore them:\n" + "\n".join(f"  - {m}" for m in missing)
-        )
+    verify_file_safety_and_existence(unique_files, path_mappings, project_root)
 
     # Dry-run: return file list without writing anything
     if dry_run:
@@ -203,58 +145,14 @@ def pack_bundle(
     # hidden characters. We surface them so the author can fix before
     # publishing, but don't block the bundle. Consumers are protected by
     # install/unpack which block on critical.
-    from ..security.gate import WARN_POLICY, SecurityGate
-    from ..utils.console import _rich_warning
-
-    _scan_findings_total = 0
-    for rel_path in unique_files:
-        disk_path = path_mappings.get(rel_path, rel_path)
-        src = project_root / disk_path
-        if src.is_symlink():
-            continue
-        if src.is_dir():
-            verdict = SecurityGate.scan_files(src, policy=WARN_POLICY)
-            _scan_findings_total += len(verdict.all_findings)
-        elif src.is_file():
-            verdict = SecurityGate.scan_text(
-                src.read_text(encoding="utf-8", errors="replace"),
-                str(src),
-                policy=WARN_POLICY,
-            )
-            _scan_findings_total += len(verdict.all_findings)
-    if _scan_findings_total:
-        _warn_msg = (
-            f"Bundle contains {_scan_findings_total} hidden character(s) across source files "
-            f"— run 'apm audit' to inspect before publishing"
-        )
-        if logger:
-            logger.warning(_warn_msg)
-        else:
-            _rich_warning(_warn_msg)
+    scan_bundle_security(unique_files, path_mappings, project_root, logger)
 
     # 6. Build output directory
     bundle_dir = output_dir / f"{pkg_name}-{pkg_version}"
     bundle_dir.mkdir(parents=True, exist_ok=True)
-    bundle_dir_resolved = bundle_dir.resolve()
 
     # 7. Copy files preserving directory structure
-    for rel_path in unique_files:
-        # For cross-target mapped files, read from the original disk path
-        disk_path = path_mappings.get(rel_path, rel_path)
-        src = project_root / disk_path
-        if src.is_symlink():
-            continue  # Never bundle symlinks
-        dest = bundle_dir / rel_path
-        # Defense-in-depth: verify mapped destination stays inside the bundle
-        if not dest.resolve().is_relative_to(bundle_dir_resolved):
-            raise ValueError(f"Refusing to write outside bundle directory: {rel_path!r}")
-        if src.is_dir():
-            from ..security.gate import ignore_non_content
-
-            shutil.copytree(src, dest, dirs_exist_ok=True, ignore=ignore_non_content)
-        else:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest, follow_symlinks=False)
+    copy_bundle_files(unique_files, path_mappings, project_root, bundle_dir)
 
     # 8. Enrich lockfile copy and write to bundle
     enriched_yaml = enrich_lockfile_for_pack(lockfile, fmt, effective_target)

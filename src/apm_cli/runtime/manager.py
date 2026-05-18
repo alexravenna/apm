@@ -321,6 +321,35 @@ class RuntimeManager:
         # Check in system PATH as fallback
         return shutil.which(binary_name) is not None
 
+    def _remove_npm_runtime(self, runtime_name: str, npm_package: str) -> bool:
+        """Uninstall an npm-global runtime package.
+
+        Returns True on success, False on any failure.
+        """
+        try:
+            result = subprocess.run(
+                ["npm", "uninstall", "-g", npm_package],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            if result.returncode == 0:
+                click.echo(
+                    f"{Fore.GREEN}[+] Successfully removed {runtime_name} runtime{Style.RESET_ALL}"
+                )
+                return True
+            else:
+                click.echo(
+                    f"{Fore.RED}[x] Failed to remove {runtime_name}: {result.stderr}{Style.RESET_ALL}",
+                    err=True,
+                )
+                return False
+        except Exception as e:
+            click.echo(
+                f"{Fore.RED}[x] Failed to remove {runtime_name}: {e}{Style.RESET_ALL}", err=True
+            )
+            return False
+
     def remove_runtime(self, runtime_name: str) -> bool:
         """Remove an installed runtime."""
         if runtime_name not in self.supported_runtimes:
@@ -333,29 +362,7 @@ class RuntimeManager:
             "gemini": "@google/gemini-cli",
         }
         if runtime_name in _npm_packages:
-            try:
-                result = subprocess.run(
-                    ["npm", "uninstall", "-g", _npm_packages[runtime_name]],
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                )
-                if result.returncode == 0:
-                    click.echo(
-                        f"{Fore.GREEN}[+] Successfully removed {runtime_name} runtime{Style.RESET_ALL}"
-                    )
-                    return True
-                else:
-                    click.echo(
-                        f"{Fore.RED}[x] Failed to remove {runtime_name}: {result.stderr}{Style.RESET_ALL}",
-                        err=True,
-                    )
-                    return False
-            except Exception as e:
-                click.echo(
-                    f"{Fore.RED}[x] Failed to remove {runtime_name}: {e}{Style.RESET_ALL}", err=True
-                )
-                return False
+            return self._remove_npm_runtime(runtime_name, _npm_packages[runtime_name])
 
         # Handle other runtimes (installed in APM runtime directory)
         binary_name = self.supported_runtimes[runtime_name]["binary"]

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import builtins
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -16,23 +17,36 @@ if TYPE_CHECKING:
     from apm_cli.commands.install import InstallLogger
 
 
-def render_and_exit(
-    *,
-    logger: InstallLogger,
-    should_install_apm: bool,
-    apm_deps: Sequence[Any],
-    mcp_deps: Sequence[Any],
-    dev_apm_deps: Sequence[Any],
-    should_install_mcp: bool,
-    update: bool,
-    only_packages: Sequence[str] | None = None,
-    apm_dir: Path,
-) -> None:
+@dataclass
+class DryRunParams:
+    """Bundled arguments for :func:`render_and_exit`."""
+
+    logger: Any
+    should_install_apm: bool
+    apm_deps: Sequence[Any]
+    mcp_deps: Sequence[Any]
+    dev_apm_deps: Sequence[Any]
+    should_install_mcp: bool
+    update: bool
+    apm_dir: Any
+    only_packages: Sequence[str] | None = None
+
+
+def render_and_exit(params: DryRunParams) -> None:
     """Render the dry-run preview to the user.
 
     The caller is responsible for ``return``-ing after this function
     completes -- this function does NOT exit or return early on its own.
     """
+    logger = params.logger
+    should_install_apm = params.should_install_apm
+    apm_deps = params.apm_deps
+    mcp_deps = params.mcp_deps
+    dev_apm_deps = params.dev_apm_deps
+    should_install_mcp = params.should_install_mcp
+    update = params.update
+    only_packages = params.only_packages
+    apm_dir = params.apm_dir
     from apm_cli.deps.lockfile import LockFile, get_lockfile_path
     from apm_cli.drift import detect_orphans
 

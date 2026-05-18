@@ -79,13 +79,11 @@ def should_animate() -> bool:
         return False
     if mode in ("always", "on", "1", "true", "yes"):
         return True
-    # mode == "auto" (or unrecognized -- treat as auto)
-    if os.environ.get("CI", "").strip().lower() in ("1", "true", "yes"):
-        return False
-    if os.environ.get("TERM", "").strip().lower() in ("", "dumb"):
-        return False
+    # mode == "auto" (or unrecognised -- treat as auto)
+    ci_active = os.environ.get("CI", "").strip().lower() in ("1", "true", "yes")
+    dumb_term = os.environ.get("TERM", "").strip().lower() in ("", "dumb")
     c = _get_console()
-    if c is None:
+    if ci_active or dumb_term or c is None:
         return False
     try:
         return bool(getattr(c, "is_terminal", False)) and bool(getattr(c, "is_interactive", False))

@@ -9,6 +9,7 @@ import toml
 from ...registry.client import SimpleRegistryClient
 from ...registry.integration import RegistryIntegration
 from ...utils.console import _rich_warning
+from . import _codex_env
 from .base import MCPClientAdapter
 
 _log = logging.getLogger(__name__)
@@ -369,74 +370,7 @@ class CodexClientAdapter(MCPClientAdapter):
         Returns:
             dict: Dictionary of resolved environment variable values.
         """
-        import os
-        import sys
-
-        from rich.prompt import Prompt
-
-        resolved = {}
-        env_overrides = env_overrides or {}
-
-        # If env_overrides is provided, it means the CLI has already handled environment variable collection
-        # In this case, we should NEVER prompt for additional variables
-        skip_prompting = bool(env_overrides)
-
-        # Check for CI/automated environment via APM_E2E_TESTS flag (more reliable than TTY detection)
-        if os.getenv("APM_E2E_TESTS") == "1":
-            skip_prompting = True
-            print(" APM_E2E_TESTS detected, will skip environment variable prompts")
-
-        # Also skip prompting if we're in a non-interactive environment (fallback)
-        is_interactive = sys.stdin.isatty() and sys.stdout.isatty()
-        if not is_interactive:
-            skip_prompting = True
-
-        # Add default GitHub MCP server environment variables for essential functionality first
-        # This ensures variables have defaults when user provides empty values or they're optional
-        default_github_env = {"GITHUB_TOOLSETS": "context", "GITHUB_DYNAMIC_TOOLSETS": "1"}
-
-        # Track which variables were explicitly provided with empty values (user wants defaults)
-        empty_value_vars = set()
-        if env_overrides:
-            for key, value in env_overrides.items():
-                if key in env_overrides and (not value or not value.strip()):
-                    empty_value_vars.add(key)
-
-        for env_var in env_vars:
-            if isinstance(env_var, dict):
-                name = env_var.get("name", "")
-                description = env_var.get("description", "")
-                required = env_var.get("required", True)
-
-                if name:
-                    # First check overrides, then environment
-                    value = env_overrides.get(name) or os.getenv(name)
-
-                    # Only prompt if not provided in overrides or environment AND it's required AND we're not in managed override mode
-                    if not value and required and not skip_prompting:
-                        # Only prompt if not provided in overrides
-                        prompt_text = f"Enter value for {name}"
-                        if description:
-                            prompt_text += f" ({description})"
-                        value = Prompt.ask(
-                            prompt_text,
-                            password=bool("token" in name.lower() or "key" in name.lower()),
-                        )
-
-                    # Add variable if it has a value OR if user explicitly provided empty and we have a default
-                    if value and value.strip():
-                        resolved[name] = value
-                    elif name in empty_value_vars and name in default_github_env:
-                        # User provided empty value and we have a default - use default
-                        resolved[name] = default_github_env[name]
-                    elif not required and name in default_github_env:
-                        # Variable is optional and we have a default - use default
-                        resolved[name] = default_github_env[name]
-                    elif skip_prompting and name in default_github_env:
-                        # Non-interactive environment and we have a default - use default
-                        resolved[name] = default_github_env[name]
-
-        return resolved
+        return _codex_env.process_environment_variables(env_vars, env_overrides)
 
     def _resolve_variable_placeholders(self, value, resolved_env, runtime_vars):
         """Resolve both environment and runtime variable placeholders in values.
@@ -449,36 +383,11 @@ class CodexClientAdapter(MCPClientAdapter):
         Returns:
             str: Processed value with actual variable values.
         """
-        import re
-
-        if not value:
-            return value
-
-        processed = str(value)
-
-        # Replace <TOKEN_NAME> with actual values from resolved_env (for Docker env vars)
-        env_pattern = r"<([A-Z_][A-Z0-9_]*)>"
-
-        def replace_env_var(match):
-            env_name = match.group(1)
-            return resolved_env.get(env_name, match.group(0))  # Return original if not found
-
-        processed = re.sub(env_pattern, replace_env_var, processed)
-
-        # Replace {runtime_var} with actual values from runtime_vars
-        runtime_pattern = r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}"
-
-        def replace_runtime_var(match):
-            var_name = match.group(1)
-            return runtime_vars.get(var_name, match.group(0))  # Return original if not found
-
-        processed = re.sub(runtime_pattern, replace_runtime_var, processed)
-
-        return processed
+        return _codex_env.resolve_variable_placeholders(value, resolved_env, runtime_vars)
 
     def _resolve_env_placeholders(self, value, resolved_env):
         """Legacy method for backward compatibility. Use _resolve_variable_placeholders instead."""
-        return self._resolve_variable_placeholders(value, resolved_env, {})
+        return _codex_env.resolve_variable_placeholders(value, resolved_env, {})
 
     def _ensure_docker_env_flags(self, base_args, env_vars):
         """Ensure all environment variables are represented as -e flags in Docker args.
@@ -493,48 +402,7 @@ class CodexClientAdapter(MCPClientAdapter):
         Returns:
             list: Docker arguments with -e flags for all environment variables.
         """
-        if not env_vars:
-            return base_args
-
-        result = []
-        existing_env_vars = set()
-
-        # First pass: collect existing -e flags and build result with existing args
-        i = 0
-        while i < len(base_args):
-            arg = base_args[i]
-            result.append(arg)
-
-            # Track existing -e flags
-            if arg == "-e" and i + 1 < len(base_args):
-                env_var_name = base_args[i + 1]
-                existing_env_vars.add(env_var_name)
-                result.append(env_var_name)
-                i += 2
-            else:
-                i += 1
-
-        # Second pass: add -e flags for any environment variables not already present
-        # Insert them after "run" but before the image name (last argument)
-        image_name = result[-1] if result else ""
-        if image_name and not image_name.startswith("-"):
-            # Remove image name temporarily
-            result.pop()
-
-            # Add missing environment variable flags
-            for env_name in sorted(env_vars.keys()):
-                if env_name not in existing_env_vars:
-                    result.extend(["-e", env_name])
-
-            # Add image name back
-            result.append(image_name)
-        else:
-            # If we can't identify image name, just append at the end
-            for env_name in sorted(env_vars.keys()):
-                if env_name not in existing_env_vars:
-                    result.extend(["-e", env_name])
-
-        return result
+        return _codex_env.ensure_docker_env_flags(base_args, env_vars)
 
     def _inject_docker_env_vars(self, args, env_vars):
         """Inject environment variables into Docker arguments as -e flags.
@@ -546,31 +414,7 @@ class CodexClientAdapter(MCPClientAdapter):
         Returns:
             list: Updated arguments with environment variables injected as -e flags.
         """
-        if not env_vars:
-            return args
-
-        result = []
-        existing_env_vars = set()
-
-        # First pass: collect existing -e flags to avoid duplicates
-        i = 0
-        while i < len(args):
-            if args[i] == "-e" and i + 1 < len(args):
-                existing_env_vars.add(args[i + 1])
-                i += 2
-            else:
-                i += 1
-
-        # Second pass: build the result with new env vars injected after "run"
-        for i, arg in enumerate(args):  # noqa: B007
-            result.append(arg)
-            # If this is a docker run command, inject new environment variables after "run"
-            if arg == "run":
-                for env_name in env_vars:
-                    if env_name not in existing_env_vars:
-                        result.extend(["-e", env_name])
-
-        return result
+        return _codex_env.inject_docker_env_vars(args, env_vars)
 
     def _select_best_package(self, packages):
         """Select the best package for installation from available packages.

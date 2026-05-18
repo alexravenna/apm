@@ -37,6 +37,13 @@ from typing import Any
 from ...utils.path_security import PathTraversalError, validate_path_segments
 from ..errors import MarketplaceYmlError
 from ..output_profiles import MARKETPLACE_OUTPUTS, known_output_names
+from ._package_field_helpers import (
+    _merge_and_cap_tags,
+    _optional_non_empty_string,
+    _optional_validated_path,
+    _parse_author,
+    _parse_package_tags,
+)
 from .class_ import (
     MarketplaceBuild,
     MarketplaceClaudeConfig,
@@ -79,9 +86,6 @@ _PACKAGE_ENTRY_KEYS = frozenset(
         "category",
     }
 )
-_MAX_TAGS_COUNT = 50
-_MAX_TAG_LENGTH = 100
-_AUTHOR_OBJECT_KEYS = frozenset({"name", "email", "url"})
 _APM_MARKETPLACE_KEYS = frozenset(
     {
         "name",  # optional override of top-level apm.yml name
@@ -108,46 +112,6 @@ _CODEX_KEYS = frozenset(
     }
 )
 MarketplaceYml = MarketplaceConfig
-
-
-def _parse_author(raw: Any, index: int) -> dict[str, str] | None:
-    """Normalize a curator-supplied ``author`` value to a Claude-Code-
-    compliant object ``{name, email?, url?}``.
-
-    Accepts either a non-empty string (treated as ``name``) or a mapping
-    with at least ``name`` and only the permitted keys. Returns ``None``
-    when ``raw`` is ``None``. Raises :class:`MarketplaceYmlError` on any
-    other shape.
-    """
-    if raw is None:
-        return None
-    ctx = f"packages[{index}].author"
-    if isinstance(raw, str):
-        name = raw.strip()
-        if not name:
-            raise MarketplaceYmlError(f"'{ctx}' must be a non-empty string or object with 'name'")
-        return {"name": name}
-    if isinstance(raw, dict):
-        unknown = set(raw.keys()) - _AUTHOR_OBJECT_KEYS
-        if unknown:
-            raise MarketplaceYmlError(
-                f"'{ctx}' has unknown key(s): "
-                f"{', '.join(sorted(unknown))}; allowed: "
-                f"{', '.join(sorted(_AUTHOR_OBJECT_KEYS))}"
-            )
-        name = raw.get("name")
-        if not isinstance(name, str) or not name.strip():
-            raise MarketplaceYmlError(f"'{ctx}.name' is required and must be a non-empty string")
-        out: dict[str, str] = {"name": name.strip()}
-        for key in ("email", "url"):
-            val = raw.get(key)
-            if val is None:
-                continue
-            if not isinstance(val, str) or not val.strip():
-                raise MarketplaceYmlError(f"'{ctx}.{key}' must be a non-empty string")
-            out[key] = val.strip()
-        return out
-    raise MarketplaceYmlError(f"'{ctx}' must be a string or object, got {type(raw).__name__}")
 
 
 def _require_str(
@@ -307,20 +271,85 @@ def _parse_codex(raw: Any) -> MarketplaceCodexConfig:
     return MarketplaceCodexConfig(output=output)
 
 
+def _validate_output_name(name: str) -> str:
+    """Validate one marketplace output name and return it stripped."""
+    stripped = name.strip()
+    known = known_output_names()
+    if stripped not in known:
+        raise MarketplaceYmlError(
+            f"Unknown marketplace output '{stripped}'. "
+            f"Permitted outputs: {', '.join(sorted(known))}"
+        )
+    return stripped
+
+
+def _parse_output_map_entry(name: str, value: Any) -> MarketplaceOutputSpec:
+    """Parse one entry from the map-form outputs block."""
+    path = MARKETPLACE_OUTPUTS[name].default_output
+    path_explicit = False
+    if value is None:
+        return MarketplaceOutputSpec(name=name, path=path, path_explicit=path_explicit)
+    if not isinstance(value, dict):
+        raise MarketplaceYmlError(f"'outputs.{name}' must be a mapping or null")
+    unknown = set(value.keys()) - {"path"}
+    if unknown:
+        raise MarketplaceYmlError(
+            f"Unknown key(s) in 'outputs.{name}': {', '.join(sorted(unknown))}"
+        )
+    raw_path = value.get("path")
+    if raw_path is not None:
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise MarketplaceYmlError(f"'outputs.{name}.path' must be a non-empty string")
+        path = raw_path.strip()
+        path_explicit = True
+        try:
+            validate_path_segments(path, context=f"outputs.{name}.path")
+        except PathTraversalError as exc:
+            raise MarketplaceYmlError(str(exc)) from exc
+    return MarketplaceOutputSpec(name=name, path=path, path_explicit=path_explicit)
+
+
+def _parse_outputs_map(
+    raw: dict[str, Any],
+) -> tuple[tuple[str, ...], tuple[MarketplaceOutputSpec, ...]]:
+    """Parse the new map-form outputs block."""
+    outputs: list[str] = []
+    specs: list[MarketplaceOutputSpec] = []
+    seen: set[str] = set()
+    for key, value in raw.items():
+        if not isinstance(key, str) or not key.strip():
+            raise MarketplaceYmlError("'outputs' map keys must be non-empty strings")
+        name = _validate_output_name(key)
+        if name in seen:
+            raise MarketplaceYmlError(f"Duplicate marketplace output '{name}'")
+        seen.add(name)
+        outputs.append(name)
+        specs.append(_parse_output_map_entry(name, value))
+    if not outputs:
+        raise MarketplaceYmlError("'outputs' must contain at least one marketplace output")
+    return tuple(outputs), tuple(specs)
+
+
+def _append_outputs_deprecation_warning(
+    outputs_list: list[str], warnings_sink: list[str] | None
+) -> None:
+    """Append the list-form outputs deprecation warning when requested."""
+    if warnings_sink is None:
+        return
+    names_str = ", ".join(outputs_list)
+    map_lines = "\n".join(f"        {name}: {{}}" for name in outputs_list)
+    warnings_sink.append(
+        f"outputs: [{names_str}] is deprecated; use the map form:\n\n"
+        f"      outputs:\n{map_lines}\n\n"
+        "    The list form will be removed in v0.15."
+    )
+
+
 def _parse_outputs(
     raw: Any,
     warnings_sink: list[str] | None = None,
 ) -> tuple[tuple[str, ...], tuple[MarketplaceOutputSpec, ...]]:
-    """Parse the marketplace output selector.
-
-    Accepts:
-    - ``None`` → default (claude only).
-    - A list of strings → back-compat list form (emits deprecation warning).
-    - A string → single-element back-compat list form.
-    - A dict → new map form with optional per-format ``path:``.
-
-    Returns ``(outputs_tuple, output_specs_tuple)``.
-    """
+    """Parse the marketplace output selector."""
     if raw is None:
         default_spec = MarketplaceOutputSpec(
             name="claude",
@@ -328,66 +357,11 @@ def _parse_outputs(
             path_explicit=False,
         )
         return ("claude",), (default_spec,)
-
-    # --- Map form (new) ---
     if isinstance(raw, dict):
-        outputs: list[str] = []
-        specs: list[MarketplaceOutputSpec] = []
-        seen: set[str] = set()
-        known = known_output_names()
+        return _parse_outputs_map(raw)
 
-        for key, value in raw.items():
-            if not isinstance(key, str) or not key.strip():
-                raise MarketplaceYmlError("'outputs' map keys must be non-empty strings")
-            name = key.strip()
-            if name not in known:
-                raise MarketplaceYmlError(
-                    f"Unknown marketplace output '{name}'. "
-                    f"Permitted outputs: {', '.join(sorted(known))}"
-                )
-            if name in seen:
-                raise MarketplaceYmlError(f"Duplicate marketplace output '{name}'")
-            seen.add(name)
-
-            # Value can be null/{}/mapping with optional path
-            path_explicit = False
-            path = MARKETPLACE_OUTPUTS[name].default_output
-            if value is not None:
-                if not isinstance(value, dict):
-                    raise MarketplaceYmlError(f"'outputs.{name}' must be a mapping or null")
-                raw_path = value.get("path")
-                if raw_path is not None:
-                    if not isinstance(raw_path, str) or not raw_path.strip():
-                        raise MarketplaceYmlError(
-                            f"'outputs.{name}.path' must be a non-empty string"
-                        )
-                    path = raw_path.strip()
-                    path_explicit = True
-                    try:
-                        validate_path_segments(path, context=f"outputs.{name}.path")
-                    except PathTraversalError as exc:
-                        raise MarketplaceYmlError(str(exc)) from exc
-                # Check for unknown keys inside the format entry
-                _valid_output_entry_keys = {"path"}
-                unknown = set(value.keys()) - _valid_output_entry_keys
-                if unknown:
-                    raise MarketplaceYmlError(
-                        f"Unknown key(s) in 'outputs.{name}': {', '.join(sorted(unknown))}"
-                    )
-
-            outputs.append(name)
-            specs.append(MarketplaceOutputSpec(name=name, path=path, path_explicit=path_explicit))
-
-        if not outputs:
-            raise MarketplaceYmlError("'outputs' must contain at least one marketplace output")
-        return tuple(outputs), tuple(specs)
-
-    # --- List / string form (deprecated back-compat) ---
-    if isinstance(raw, str):
-        raw_items = [raw]
-    elif isinstance(raw, list):
-        raw_items = raw
-    else:
+    raw_items = [raw] if isinstance(raw, str) else raw if isinstance(raw, list) else None
+    if raw_items is None:
         raise MarketplaceYmlError("'outputs' must be a string, list, or mapping")
 
     outputs_list: list[str] = []
@@ -396,13 +370,7 @@ def _parse_outputs(
     for index, item in enumerate(raw_items):
         if not isinstance(item, str) or not item.strip():
             raise MarketplaceYmlError(f"'outputs[{index}]' must be a non-empty string")
-        output = item.strip()
-        known_outputs = known_output_names()
-        if output not in known_outputs:
-            raise MarketplaceYmlError(
-                f"Unknown marketplace output '{output}'. "
-                f"Permitted outputs: {', '.join(sorted(known_outputs))}"
-            )
+        output = _validate_output_name(item)
         if output in seen_set:
             raise MarketplaceYmlError(f"Duplicate marketplace output '{output}'")
         seen_set.add(output)
@@ -417,18 +385,7 @@ def _parse_outputs(
 
     if not outputs_list:
         raise MarketplaceYmlError("'outputs' must contain at least one marketplace output")
-
-    # Emit deprecation warning for list/string form
-    names_str = ", ".join(outputs_list)
-    map_lines = "\n".join(f"        {n}: {{}}" for n in outputs_list)
-    deprecation_msg = (
-        f"outputs: [{names_str}] is deprecated; use the map form:\n\n"
-        f"      outputs:\n{map_lines}\n\n"
-        f"    The list form will be removed in v0.15."
-    )
-    if warnings_sink is not None:
-        warnings_sink.append(deprecation_msg)
-
+    _append_outputs_deprecation_warning(outputs_list, warnings_sink)
     return tuple(outputs_list), tuple(specs_list)
 
 
@@ -437,148 +394,37 @@ def _parse_package_entry(raw: Any, index: int) -> PackageEntry:
     if not isinstance(raw, dict):
         raise MarketplaceYmlError(f"packages[{index}] must be a mapping")
 
-    # -- strict key check --
     _check_unknown_keys(raw, _PACKAGE_ENTRY_KEYS, context=f"packages[{index}]")
-
     name = _require_str(raw, "name", context=f"packages[{index}]")
     source = _require_str(raw, "source", context=f"packages[{index}]")
     _validate_source(source, index=index)
     is_local = bool(LOCAL_SOURCE_RE.match(source))
 
-    # APM-only: subdir (irrelevant for local packages but harmless)
-    subdir: str | None = raw.get("subdir")
-    if subdir is not None:
-        if not isinstance(subdir, str) or not subdir.strip():
-            raise MarketplaceYmlError(f"'packages[{index}].subdir' must be a non-empty string")
-        subdir = subdir.strip()
-        try:
-            validate_path_segments(subdir, context=f"packages[{index}].subdir")
-        except PathTraversalError as exc:
-            raise MarketplaceYmlError(str(exc)) from exc
-
-    # APM-only: version (semver range -- stored as string, not parsed here)
-    version: str | None = raw.get("version")
-    if version is not None:
-        version = str(version).strip()
-        if not version:
-            raise MarketplaceYmlError(f"'packages[{index}].version' must be a non-empty string")
-
-    # APM-only: ref
-    ref: str | None = raw.get("ref")
-    if ref is not None:
-        ref = str(ref).strip()
-        if not ref:
-            raise MarketplaceYmlError(f"'packages[{index}].ref' must be a non-empty string")
-
-    # At least one of version or ref must be present for REMOTE packages.
-    # Local-path packages skip git resolution so the requirement does not
-    # apply to them.
+    subdir = _optional_validated_path(raw, "subdir", index=index)
+    version = _optional_non_empty_string(raw, "version", index=index)
+    ref = _optional_non_empty_string(raw, "ref", index=index)
     if not is_local and version is None and ref is None:
         raise MarketplaceYmlError(
-            f"packages[{index}] ('{name}'): remote packages require at "
-            f"least one of 'version' or 'ref'"
+            f"packages[{index}] ('{name}'): remote packages require at least one of 'version' or 'ref'"
         )
 
-    # APM-only: tag_pattern
-    tag_pattern: str | None = raw.get("tag_pattern")
+    tag_pattern = _optional_non_empty_string(raw, "tag_pattern", index=index)
     if tag_pattern is not None:
-        if not isinstance(tag_pattern, str) or not tag_pattern.strip():
-            raise MarketplaceYmlError(f"'packages[{index}].tag_pattern' must be a non-empty string")
-        tag_pattern = tag_pattern.strip()
         _validate_tag_pattern(tag_pattern, context=f"packages[{index}].tag_pattern")
 
-    # APM-only: include_prerelease
     include_prerelease = raw.get("include_prerelease", False)
     if not isinstance(include_prerelease, bool):
         raise MarketplaceYmlError(f"'packages[{index}].include_prerelease' must be a boolean")
 
-    # Anthropic pass-through: description
-    description: str | None = raw.get("description")
-    if description is not None:
-        if not isinstance(description, str) or not description.strip():
-            raise MarketplaceYmlError(f"'packages[{index}].description' must be a non-empty string")
-        description = description.strip()
-
-    # Anthropic pass-through: homepage
-    homepage: str | None = raw.get("homepage")
-    if homepage is not None:
-        if not isinstance(homepage, str) or not homepage.strip():
-            raise MarketplaceYmlError(f"'packages[{index}].homepage' must be a non-empty string")
-        homepage = homepage.strip()
-
-    # Anthropic pass-through: tags
-    raw_tags = raw.get("tags")
-    tags: tuple[str, ...] = ()
-    if raw_tags is not None:
-        if not isinstance(raw_tags, list):
-            raise MarketplaceYmlError(f"'packages[{index}].tags' must be a list of strings")
-        for i, item in enumerate(raw_tags):
-            if not isinstance(item, str):
-                raise MarketplaceYmlError(
-                    f"'packages[{index}].tags[{i}]' must be a string, got {type(item).__name__}"
-                )
-        tags = tuple(str(t) for t in raw_tags)
-
-    # Anthropic pass-through: keywords (alias for tags -- merged, deduplicated)
-    raw_keywords = raw.get("keywords")
-    if raw_keywords is not None:
-        if not isinstance(raw_keywords, list):
-            raise MarketplaceYmlError(f"'packages[{index}].keywords' must be a list of strings")
-        for i, item in enumerate(raw_keywords):
-            if not isinstance(item, str):
-                raise MarketplaceYmlError(
-                    f"'packages[{index}].keywords[{i}]' must be a string, got {type(item).__name__}"
-                )
-        # Merge: tags first, then keywords entries (deduplicated)
-        seen = set(tags)
-        merged = list(tags)
-        for kw in raw_keywords:
-            if kw not in seen:
-                seen.add(kw)
-                merged.append(kw)
-        tags = tuple(merged)
-
-    # S4: cap tags array length and item length
-    if len(tags) > _MAX_TAGS_COUNT:
-        import logging as _logging
-
-        _logging.getLogger(__name__).warning(
-            "packages[%d] ('%s'): tags truncated from %d to %d items",
-            index,
-            name,
-            len(tags),
-            _MAX_TAGS_COUNT,
-        )
-        tags = tags[:_MAX_TAGS_COUNT]
-    tags = tuple(t[:_MAX_TAG_LENGTH] for t in tags)
-
-    # Anthropic pass-through: author -- accept string OR object input,
-    # normalize to ``{name, email?, url?}`` per the Claude Code plugin
-    # manifest schema (json.schemastore.org/claude-code-plugin-manifest.json).
+    description = _optional_non_empty_string(raw, "description", index=index)
+    homepage = _optional_non_empty_string(raw, "homepage", index=index)
+    tags = _parse_package_tags(raw, "tags", index=index)
+    keywords = _parse_package_tags(raw, "keywords", index=index)
+    tags = _merge_and_cap_tags(tags=tags, keywords=keywords, index=index, name=name)
     author = _parse_author(raw.get("author"), index)
-
-    # Anthropic pass-through: license (S3 -- must be str)
-    license_val: str | None = raw.get("license")
-    if license_val is not None:
-        if not isinstance(license_val, str) or not license_val.strip():
-            raise MarketplaceYmlError(f"'packages[{index}].license' must be a non-empty string")
-        license_val = license_val.strip()
-
-    # Anthropic pass-through: repository (S3 -- must be str)
-    repository: str | None = raw.get("repository")
-    if repository is not None:
-        if not isinstance(repository, str) or not repository.strip():
-            raise MarketplaceYmlError(f"'packages[{index}].repository' must be a non-empty string")
-        repository = repository.strip()
-
-    # Optional marketplace category. Claude output strips this; Codex output
-    # requires and emits it.
-    category: str | None = None
-    raw_category = raw.get("category")
-    if raw_category is not None:
-        if not isinstance(raw_category, str) or not raw_category.strip():
-            raise MarketplaceYmlError(f"'packages[{index}].category' must be a non-empty string")
-        category = raw_category.strip()
+    license_val = _optional_non_empty_string(raw, "license", index=index)
+    repository = _optional_non_empty_string(raw, "repository", index=index)
+    category = _optional_non_empty_string(raw, "category", index=index)
 
     return PackageEntry(
         name=name,

@@ -371,31 +371,8 @@ def _read_yaml_mapping(path: Path) -> dict[str, Any]:
     return _loaders._read_yaml_mapping(path)
 
 
-def _build_config(
-    *,
-    marketplace_dict: dict[str, Any],
-    name: str,
-    description: str,
-    version: str,
-    source_path: Path,
-    is_legacy: bool,
-    name_overridden: bool,
-    description_overridden: bool,
-    version_overridden: bool,
-    default_output: str = ".claude-plugin/marketplace.json",
-) -> MarketplaceConfig:
-    return _loaders._build_config(
-        marketplace_dict=marketplace_dict,
-        name=name,
-        description=description,
-        version=version,
-        source_path=source_path,
-        is_legacy=is_legacy,
-        name_overridden=name_overridden,
-        description_overridden=description_overridden,
-        version_overridden=version_overridden,
-        default_output=default_output,
-    )
+def _build_config(ctx: _loaders._BuildConfigInput) -> MarketplaceConfig:
+    return _loaders._build_config(ctx)
 
 
 from . import loaders as _loaders

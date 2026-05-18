@@ -10,60 +10,12 @@ from ...constants import APM_MODULES_DIR
 from ...core.command_logger import CommandLogger
 from ...core.target_detection import TargetParamType
 from ...models.apm_package import APMPackage as APMPackage
-
-# ---------------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------------
-
-
-def _format_primitive_counts(primitives):
-    """Format primitive type counts into a comma-separated summary string."""
-    parts = []
-    for ptype, count in primitives.items():
-        if count > 0:
-            parts.append(f"{count} {ptype}")
-    return ", ".join(parts)
-
-
-def _deps_list_source_label(
-    host: str | None,
-    *,
-    is_local: bool = False,
-    lockfile_source: str | None = None,
-) -> str:
-    """Map host / local flags to the ``apm deps list`` Source column."""
-    from ...utils.github_host import is_azure_devops_hostname, is_gitlab_hostname
-
-    if is_local or lockfile_source == "local":
-        return "local"
-    if host and is_azure_devops_hostname(host):
-        return "azure-devops"
-    if host and is_gitlab_hostname(host):
-        return "gitlab"
-    return "github"
-
-
-def _dep_display_name(dep) -> str:
-    """Get display name for a locked dependency (key@version)."""
-    key = dep.get_unique_key()
-    version = (
-        dep.version
-        or (dep.resolved_commit[:7] if dep.resolved_commit else None)
-        or dep.resolved_ref
-        or "latest"
-    )
-    return f"{key}@{version}"
-
-
-def _add_tree_children(parent_branch, parent_repo_url, children_map, has_rich, depth=0):
-    """Recursively add transitive deps as nested children of a tree node."""
-    kids = children_map.get(parent_repo_url, [])
-    for child_dep in kids:
-        child_name = _dep_display_name(child_dep)
-        child_branch = parent_branch.add(f"[dim]{child_name}[/dim]") if has_rich else child_name
-        if depth < 5:  # Prevent infinite recursion
-            _add_tree_children(child_branch, child_dep.repo_url, children_map, has_rich, depth + 1)
-
+from ._utils import (
+    _add_tree_children,
+    _dep_display_name,
+    _deps_list_source_label,
+    _format_primitive_counts,
+)
 
 # ---------------------------------------------------------------------------
 # Data resolution — deps list
@@ -270,4 +222,4 @@ def info(package: str):
     display_package_info(package, package_path, logger)
 
 
-from . import deps_sections as _deps_sections
+from . import sections as _deps_sections

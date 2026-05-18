@@ -32,6 +32,7 @@ Key design rules
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -161,16 +162,18 @@ def load_marketplace_from_legacy_yml(path: Path) -> MarketplaceConfig:
     _validate_semver(version_str, context="version")
 
     return _build_config(
-        marketplace_dict=data,
-        name=name,
-        description=description,
-        version=version_str,
-        source_path=path,
-        is_legacy=True,
-        name_overridden=True,
-        description_overridden=True,
-        version_overridden=True,
-        default_output="marketplace.json",
+        _BuildConfigInput(
+            marketplace_dict=data,
+            name=name,
+            description=description,
+            version=version_str,
+            source_path=path,
+            is_legacy=True,
+            name_overridden=True,
+            description_overridden=True,
+            version_overridden=True,
+            default_output="marketplace.json",
+        )
     )
 
 
@@ -248,15 +251,17 @@ def load_marketplace_from_apm_yml(apm_yml_path: Path) -> MarketplaceConfig:
         _validate_semver(version_str, context="version")
 
     return _build_config(
-        marketplace_dict=raw_block,
-        name=name,
-        description=description,
-        version=version_str,
-        source_path=apm_yml_path,
-        is_legacy=False,
-        name_overridden=name_overridden,
-        description_overridden=desc_overridden,
-        version_overridden=ver_overridden,
+        _BuildConfigInput(
+            marketplace_dict=raw_block,
+            name=name,
+            description=description,
+            version=version_str,
+            source_path=apm_yml_path,
+            is_legacy=False,
+            name_overridden=name_overridden,
+            description_overridden=desc_overridden,
+            version_overridden=ver_overridden,
+        )
     )
 
 
@@ -283,22 +288,36 @@ def _read_yaml_mapping(path: Path) -> dict[str, Any]:
     return data
 
 
-def _build_config(
-    *,
-    marketplace_dict: dict[str, Any],
-    name: str,
-    description: str,
-    version: str,
-    source_path: Path,
-    is_legacy: bool,
-    name_overridden: bool,
-    description_overridden: bool,
-    version_overridden: bool,
-    default_output: str = ".claude-plugin/marketplace.json",
-) -> MarketplaceConfig:
+@dataclass
+class _BuildConfigInput:
+    """Input parameters for :func:`_build_config`."""
+
+    marketplace_dict: dict[str, Any]
+    name: str
+    description: str
+    version: str
+    source_path: Path
+    is_legacy: bool
+    name_overridden: bool
+    description_overridden: bool
+    version_overridden: bool
+    default_output: str = ".claude-plugin/marketplace.json"
+
+
+def _build_config(ctx: _BuildConfigInput) -> MarketplaceConfig:
     """Shared parser for the marketplace fields once name/desc/version
     have been resolved (either inherited or read directly).
     """
+    marketplace_dict = ctx.marketplace_dict
+    name = ctx.name
+    description = ctx.description
+    version = ctx.version
+    source_path = ctx.source_path
+    is_legacy = ctx.is_legacy
+    name_overridden = ctx.name_overridden
+    description_overridden = ctx.description_overridden
+    version_overridden = ctx.version_overridden
+    default_output = ctx.default_output
     warnings_sink: list[str] = []
 
     # -- owner --

@@ -11,218 +11,11 @@ from typing import Any, Optional
 
 import yaml
 
-from ..models.apm_package import DependencyReference
+from ._locked_dependency import LockedDependency  # noqa: F401 – re-exported public symbol
 
 logger = logging.getLogger(__name__)
 
 _SELF_KEY = "."
-
-
-@dataclass
-class LockedDependency:
-    """A resolved dependency with exact commit/version information."""
-
-    repo_url: str
-    host: str | None = None
-    port: int | None = None  # Non-standard SSH/HTTPS port (e.g. 7999 for Bitbucket DC)
-    registry_prefix: str | None = None  # Registry path prefix, e.g. "artifactory/github"
-    resolved_commit: str | None = None
-    resolved_ref: str | None = None
-    version: str | None = None
-    virtual_path: str | None = None
-    is_virtual: bool = False
-    depth: int = 1
-    resolved_by: str | None = None
-    package_type: str | None = None
-    deployed_files: list[str] = field(default_factory=list)
-    deployed_file_hashes: dict[str, str] = field(default_factory=dict)
-    source: str | None = None  # "local" for local deps, None/absent for remote
-    local_path: str | None = None  # Original local path (relative to project root)
-    content_hash: str | None = None  # SHA-256 of package file tree
-    is_dev: bool = False  # True for devDependencies
-    discovered_via: str | None = None  # Marketplace name (provenance)
-    marketplace_plugin_name: str | None = None  # Plugin name in marketplace
-    is_insecure: bool = False  # True when the locked source was http://
-    allow_insecure: bool = False  # True when the manifest explicitly allowed HTTP
-    skill_subset: list[str] = field(default_factory=list)  # Sorted skill names for SKILL_BUNDLE
-
-    def get_unique_key(self) -> str:
-        """Returns unique key for this dependency."""
-        if self.source == "local" and self.local_path:
-            return self.local_path
-        if self.is_virtual and self.virtual_path:
-            return f"{self.repo_url}/{self.virtual_path}"
-        return self.repo_url
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to dict for YAML output."""
-        result: dict[str, Any] = {"repo_url": self.repo_url}
-        if self.host:
-            result["host"] = self.host
-        if self.port:
-            result["port"] = self.port
-        if self.registry_prefix:
-            result["registry_prefix"] = self.registry_prefix
-        if self.resolved_commit:
-            result["resolved_commit"] = self.resolved_commit
-        if self.resolved_ref:
-            result["resolved_ref"] = self.resolved_ref
-        if self.version:
-            result["version"] = self.version
-        if self.virtual_path:
-            result["virtual_path"] = self.virtual_path
-        if self.is_virtual:
-            result["is_virtual"] = self.is_virtual
-        if self.depth != 1:
-            result["depth"] = self.depth
-        if self.resolved_by:
-            result["resolved_by"] = self.resolved_by
-        if self.package_type:
-            result["package_type"] = self.package_type
-        if self.deployed_files:
-            result["deployed_files"] = sorted(self.deployed_files)
-        if self.deployed_file_hashes:
-            result["deployed_file_hashes"] = dict(sorted(self.deployed_file_hashes.items()))
-        if self.source:
-            result["source"] = self.source
-        if self.local_path:
-            result["local_path"] = self.local_path
-        if self.content_hash:
-            result["content_hash"] = self.content_hash
-        if self.is_dev:
-            result["is_dev"] = True
-        if self.discovered_via:
-            result["discovered_via"] = self.discovered_via
-        if self.marketplace_plugin_name:
-            result["marketplace_plugin_name"] = self.marketplace_plugin_name
-        if self.is_insecure:
-            result["is_insecure"] = True
-        if self.allow_insecure:
-            result["allow_insecure"] = True
-        if self.skill_subset:
-            result["skill_subset"] = sorted(self.skill_subset)
-        return result
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "LockedDependency":
-        """Deserialize from dict.
-
-        Handles backwards compatibility:
-        - Old ``deployed_skills`` lists are migrated to ``deployed_files``
-          paths under ``.github/skills/`` and ``.claude/skills/``.
-        """
-        deployed_files = list(data.get("deployed_files", []))
-
-        # Migrate legacy deployed_skills -> deployed_files
-        old_skills = data.get("deployed_skills", [])
-        if old_skills and not deployed_files:
-            for skill_name in old_skills:
-                deployed_files.append(f".github/skills/{skill_name}/")
-                deployed_files.append(f".claude/skills/{skill_name}/")
-
-        # Defensive cast: reject non-numeric or out-of-range ports from tampered lockfiles.
-        _p_raw = data.get("port")
-        port: int | None = None
-        if _p_raw is not None:
-            try:
-                _p_int = int(_p_raw)
-            except (TypeError, ValueError):
-                _p_int = None
-            if _p_int is not None and 1 <= _p_int <= 65535:
-                port = _p_int
-
-        return cls(
-            repo_url=data["repo_url"],
-            host=data.get("host"),
-            port=port,
-            registry_prefix=data.get("registry_prefix"),
-            resolved_commit=data.get("resolved_commit"),
-            resolved_ref=data.get("resolved_ref"),
-            version=data.get("version"),
-            virtual_path=data.get("virtual_path"),
-            is_virtual=data.get("is_virtual", False),
-            depth=data.get("depth", 1),
-            resolved_by=data.get("resolved_by"),
-            package_type=data.get("package_type"),
-            deployed_files=deployed_files,
-            deployed_file_hashes=dict(data.get("deployed_file_hashes") or {}),
-            source=data.get("source"),
-            local_path=data.get("local_path"),
-            content_hash=data.get("content_hash"),
-            is_dev=data.get("is_dev", False),
-            discovered_via=data.get("discovered_via"),
-            marketplace_plugin_name=data.get("marketplace_plugin_name"),
-            is_insecure=data.get("is_insecure", False),
-            allow_insecure=data.get("allow_insecure", False),
-            skill_subset=list(data.get("skill_subset") or []),
-        )
-
-    @classmethod
-    def from_dependency_ref(
-        cls,
-        dep_ref: DependencyReference,
-        resolved_commit: str | None,
-        depth: int,
-        resolved_by: str | None,
-        is_dev: bool = False,
-        registry_config=None,
-    ) -> "LockedDependency":
-        """Create from a DependencyReference with resolution info.
-
-        Args:
-            dep_ref: The resolved dependency reference.
-            resolved_commit: Exact commit SHA that was installed, or ``None``.
-            depth: Dependency tree depth.
-            resolved_by: Parent repo URL, or ``None`` for direct dependencies.
-            is_dev: Whether this is a dev-only dependency.
-            registry_config: Optional :class:`~apm_cli.deps.registry_proxy.RegistryConfig`
-                used for this download.  When provided, ``host`` is set to the
-                pure FQDN (e.g. ``"art.example.com"``) and ``registry_prefix``
-                is set to the URL path prefix (e.g. ``"artifactory/github"``),
-                ensuring correct auth routing on subsequent installs.
-        """
-        if registry_config is not None:
-            host = registry_config.host
-            registry_prefix = registry_config.prefix
-        else:
-            host = dep_ref.host
-            registry_prefix = None
-        return cls(
-            repo_url=dep_ref.repo_url,
-            host=host,
-            port=dep_ref.port,
-            registry_prefix=registry_prefix,
-            resolved_commit=resolved_commit,
-            resolved_ref=dep_ref.reference,
-            virtual_path=dep_ref.virtual_path,
-            is_virtual=dep_ref.is_virtual,
-            depth=depth,
-            resolved_by=resolved_by,
-            source="local" if dep_ref.is_local else None,
-            local_path=dep_ref.local_path if dep_ref.is_local else None,
-            is_dev=is_dev,
-            is_insecure=dep_ref.is_insecure,
-            allow_insecure=dep_ref.allow_insecure,
-            skill_subset=sorted(dep_ref.skill_subset)
-            if isinstance(getattr(dep_ref, "skill_subset", None), list)
-            else [],
-        )
-
-    def to_dependency_ref(self) -> DependencyReference:
-        """Reconstruct a DependencyReference from this locked dependency."""
-        return DependencyReference(
-            repo_url=self.repo_url,
-            host=self.host,
-            port=self.port,
-            reference=self.resolved_ref,
-            virtual_path=self.virtual_path,
-            is_virtual=self.is_virtual,
-            artifactory_prefix=self.registry_prefix,
-            is_local=(self.source == "local"),
-            local_path=self.local_path,
-            is_insecure=self.is_insecure,
-            allow_insecure=self.allow_insecure,
-        )
 
 
 @dataclass
@@ -444,21 +237,19 @@ class LockFile:
             return False
         if set(self.dependencies.keys()) != set(other.dependencies.keys()):
             return False
-        for key, dep in self.dependencies.items():
-            other_dep = other.dependencies[key]
-            if dep.to_dict() != other_dep.to_dict():
-                return False
-        if sorted(self.mcp_servers) != sorted(other.mcp_servers):
-            return False
-        if self.mcp_configs != other.mcp_configs:
-            return False
-        if sorted(self.local_deployed_files) != sorted(other.local_deployed_files):
+        if any(
+            dep.to_dict() != other.dependencies[key].to_dict()
+            for key, dep in self.dependencies.items()
+        ):
             return False
         # Issue #887: include hash dict in equivalence so post-install
         # hash updates persist even when the file list is unchanged.
-        if dict(self.local_deployed_file_hashes) != dict(other.local_deployed_file_hashes):  # noqa: SIM103
-            return False
-        return True
+        return (
+            sorted(self.mcp_servers) == sorted(other.mcp_servers)
+            and self.mcp_configs == other.mcp_configs
+            and sorted(self.local_deployed_files) == sorted(other.local_deployed_files)
+            and dict(self.local_deployed_file_hashes) == dict(other.local_deployed_file_hashes)
+        )
 
     @classmethod
     def installed_paths_for_project(cls, project_root: Path) -> list[str]:

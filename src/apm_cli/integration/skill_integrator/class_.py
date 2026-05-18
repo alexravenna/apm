@@ -6,6 +6,8 @@ from pathlib import Path
 
 from apm_cli.integration.base_integrator import BaseIntegrator
 
+from .opts import SkillOpts, SkillPromoteOpts
+
 
 # DEPRECATED -- use IntegrationResult directly for new code.
 # Kept for backward compatibility. The fields map as follows:
@@ -165,28 +167,15 @@ class SkillIntegrator(BaseIntegrator):
         sub_skills_dir: Path,
         target_skills_root: Path,
         parent_name: str,
-        *,
-        warn: bool = True,
-        owned_by: dict[str, str] | None = None,
-        diagnostics=None,
-        managed_files=None,
-        force: bool = False,
-        project_root: Path | None = None,
-        logger=None,
-        name_filter: "set | None" = None,
+        opts: SkillPromoteOpts | None = None,
+        **kwargs,
     ) -> tuple[int, list[Path]]:
+        promote_opts = opts or SkillPromoteOpts(**kwargs)
         return _promotion._promote_sub_skills(
             sub_skills_dir,
             target_skills_root,
             parent_name,
-            warn=warn,
-            owned_by=owned_by,
-            diagnostics=diagnostics,
-            managed_files=managed_files,
-            force=force,
-            project_root=project_root,
-            logger=logger,
-            name_filter=name_filter,
+            promote_opts,
         )
 
     @staticmethod
@@ -258,22 +247,14 @@ class SkillIntegrator(BaseIntegrator):
         package_info,
         project_root: Path,
         source_skill_md: Path,
-        diagnostics=None,
-        managed_files=None,
-        force: bool = False,
-        logger=None,
-        targets=None,
+        opts: SkillOpts | None = None,
     ) -> SkillIntegrationResult:
         return _native._integrate_native_skill(
             self,
             package_info,
             project_root,
             source_skill_md,
-            diagnostics,
-            managed_files,
-            force,
-            logger,
-            targets,
+            opts,
         )
 
     def _integrate_skill_bundle(
@@ -281,47 +262,29 @@ class SkillIntegrator(BaseIntegrator):
         package_info,
         project_root: Path,
         skills_dir: Path,
-        diagnostics=None,
-        managed_files=None,
-        force: bool = False,
-        logger=None,
-        targets=None,
-        skill_subset=None,
+        opts: SkillOpts | None = None,
     ) -> SkillIntegrationResult:
         return _native._integrate_skill_bundle(
             self,
             package_info,
             project_root,
             skills_dir,
-            diagnostics,
-            managed_files,
-            force,
-            logger,
-            targets,
-            skill_subset,
+            opts,
         )
 
     def integrate_package_skill(
         self,
         package_info,
         project_root: Path,
-        diagnostics=None,
-        managed_files=None,
-        force: bool = False,
-        logger=None,
-        targets=None,
-        skill_subset=None,
+        opts: SkillOpts | None = None,
+        **kwargs,
     ) -> SkillIntegrationResult:
+        skill_opts = opts or SkillOpts(**kwargs)
         return _native.integrate_package_skill(
             self,
             package_info,
             project_root,
-            diagnostics,
-            managed_files,
-            force,
-            logger,
-            targets,
-            skill_subset,
+            skill_opts,
         )
 
     def sync_integration(

@@ -6,6 +6,58 @@ from pathlib import Path
 from .naming import normalize_skill_name, validate_skill_name
 
 
+def _build_skill_prefixes(source) -> list[str]:
+    """Return the list of skill-path prefixes for *source* targets.
+
+    Dynamic-root (cowork) targets contribute a ``cowork://`` URI prefix;
+    regular targets contribute ``<effective_root>/skills/`` path prefixes.
+    """
+    skill_prefixes: list[str] = []
+    for t in source:
+        if not t.supports("skills"):
+            continue
+        # Dynamic-root targets (cowork) use cowork:// URI prefix.
+        if t.user_root_resolver is not None:
+            from apm_cli.integration.copilot_cowork_paths import COWORK_LOCKFILE_PREFIX
+
+            if COWORK_LOCKFILE_PREFIX not in skill_prefixes:
+                skill_prefixes.append(COWORK_LOCKFILE_PREFIX)
+            continue
+        sm = t.primitives["skills"]
+        effective_root = sm.deploy_root or t.root_dir
+        skill_prefixes.append(f"{effective_root}/skills/")
+    return skill_prefixes
+
+
+def _build_installed_skill_names(apm_package, project_root: Path) -> set[str]:
+    """Return the set of expected skill directory names from installed packages.
+
+    Derives names from top-level dependencies and their promoted sub-skills
+    (via ``<install_path>/.apm/skills/``).
+    """
+    installed_skill_names: set[str] = set()
+    for dep in apm_package.get_apm_dependencies():
+        raw_name = dep.repo_url.split("/")[-1]
+        if dep.is_virtual and dep.virtual_path:
+            raw_name = dep.virtual_path.split("/")[-1]
+        is_valid, _ = validate_skill_name(raw_name)
+        skill_name = raw_name if is_valid else normalize_skill_name(raw_name)
+        installed_skill_names.add(skill_name)
+
+        # Also include promoted sub-skills from installed packages
+        install_path = dep.get_install_path(project_root / "apm_modules")
+        sub_skills_dir = install_path / ".apm" / "skills"
+        if sub_skills_dir.is_dir():
+            for sub_skill_path in sub_skills_dir.iterdir():
+                if sub_skill_path.is_dir() and (sub_skill_path / "SKILL.md").exists():
+                    raw_sub = sub_skill_path.name
+                    is_valid, _ = validate_skill_name(raw_sub)
+                    installed_skill_names.add(
+                        raw_sub if is_valid else normalize_skill_name(raw_sub)
+                    )
+    return installed_skill_names
+
+
 def sync_integration(
     self,
     apm_package,
@@ -41,21 +93,7 @@ def sync_integration(
     stats = {"files_removed": 0, "errors": 0}
 
     # Build the set of valid skill prefixes from targets
-    skill_prefixes: list[str] = []
-    for t in source:
-        if not t.supports("skills"):
-            continue
-        # Dynamic-root targets (cowork) use cowork:// URI prefix.
-        if t.user_root_resolver is not None:
-            from apm_cli.integration.copilot_cowork_paths import COWORK_LOCKFILE_PREFIX
-
-            if COWORK_LOCKFILE_PREFIX not in skill_prefixes:
-                skill_prefixes.append(COWORK_LOCKFILE_PREFIX)
-            continue
-        sm = t.primitives["skills"]
-        effective_root = sm.deploy_root or t.root_dir
-        skill_prefixes.append(f"{effective_root}/skills/")
-    skill_prefix_tuple = tuple(skill_prefixes)
+    skill_prefix_tuple = tuple(_build_skill_prefixes(source))
 
     if managed_files is not None:
         # Manifest-based removal -- only remove tracked skill directories
@@ -130,26 +168,7 @@ def sync_integration(
 
     # Legacy fallback: npm-style orphan detection
     # Build set of expected skill directory names from installed packages
-    installed_skill_names = set()
-    for dep in apm_package.get_apm_dependencies():
-        raw_name = dep.repo_url.split("/")[-1]
-        if dep.is_virtual and dep.virtual_path:
-            raw_name = dep.virtual_path.split("/")[-1]
-        is_valid, _ = validate_skill_name(raw_name)
-        skill_name = raw_name if is_valid else normalize_skill_name(raw_name)
-        installed_skill_names.add(skill_name)
-
-        # Also include promoted sub-skills from installed packages
-        install_path = dep.get_install_path(project_root / "apm_modules")
-        sub_skills_dir = install_path / ".apm" / "skills"
-        if sub_skills_dir.is_dir():
-            for sub_skill_path in sub_skills_dir.iterdir():
-                if sub_skill_path.is_dir() and (sub_skill_path / "SKILL.md").exists():
-                    raw_sub = sub_skill_path.name
-                    is_valid, _ = validate_skill_name(raw_sub)
-                    installed_skill_names.add(
-                        raw_sub if is_valid else normalize_skill_name(raw_sub)
-                    )
+    installed_skill_names = _build_installed_skill_names(apm_package, project_root)
 
     # Clean all target skill directories dynamically
     seen_cleanup_dirs: set[Path] = set()

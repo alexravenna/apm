@@ -8,6 +8,8 @@ from pathlib import Path
 from apm_cli.core.scope import InstallScope
 from apm_cli.utils.console import STATUS_SYMBOLS
 
+from .opts import _ResolveRuntimesOpts
+
 
 def _load_apm_config_if_needed(apm_config: dict | None, project_root_path: Path) -> dict | None:
     """Load apm.yml only when the caller did not provide parsed config."""
@@ -131,28 +133,27 @@ def _filter_user_scope_runtimes(target_runtimes: list[str], logger) -> list[str]
     return filtered_runtimes
 
 
-def _resolve_runtimes(
-    *,
-    runtime: str | None,
-    exclude: str | None,
-    verbose: bool,
-    apm_config: dict | None,
-    project_root,
-    user_scope: bool,
-    explicit_target: str | None,
-    scope: InstallScope | None,
-    logger,
-    console,
-    mcp_integrator_cls,
-    is_vscode_available,
-) -> tuple[list[str], dict | None]:
+def _resolve_runtimes(ctx: _ResolveRuntimesOpts) -> tuple[list[str], dict | None]:
     """Resolve target runtimes and return them with the effective config."""
+    runtime = ctx.runtime
+    exclude = ctx.exclude
+    verbose = ctx.verbose
+    apm_config = ctx.apm_config
+    project_root = ctx.project_root
+    user_scope = ctx.user_scope
+    explicit_target = ctx.explicit_target
+    scope = ctx.scope
+    logger = ctx.logger
+    console = ctx.console
+    mcp_integrator_cls = ctx.mcp_integrator_cls
+    is_vscode_available = ctx.is_vscode_available
     if runtime:
         logger.progress(f"Targeting specific runtime: {runtime}")
         target_runtimes = [runtime]
     else:
         project_root_path = Path(project_root) if project_root is not None else Path.cwd()
-        apm_config = _load_apm_config_if_needed(apm_config, project_root_path)
+        if project_root is not None:
+            apm_config = _load_apm_config_if_needed(apm_config, project_root_path)
         installed_runtimes = _detect_installed_runtimes(project_root_path, is_vscode_available)
         script_runtimes = mcp_integrator_cls._detect_runtimes(
             apm_config.get("scripts", {}) if apm_config else {}
@@ -185,12 +186,15 @@ def _resolve_runtimes(
             target_runtimes = ["vscode"]
             logger.progress("No runtimes installed, using VS Code as fallback")
 
+    gate_explicit_target = explicit_target
+    if gate_explicit_target is None and runtime == "vscode":
+        gate_explicit_target = runtime
     target_runtimes = mcp_integrator_cls._gate_project_scoped_runtimes(
         target_runtimes,
         user_scope=user_scope,
         project_root=project_root,
         apm_config=apm_config,
-        explicit_target=explicit_target,
+        explicit_target=gate_explicit_target,
     )
     if scope is InstallScope.USER and target_runtimes:
         target_runtimes = _filter_user_scope_runtimes(target_runtimes, logger)

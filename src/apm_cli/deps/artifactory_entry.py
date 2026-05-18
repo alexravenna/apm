@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
@@ -29,6 +30,16 @@ if TYPE_CHECKING:
     from .registry_proxy import RegistryConfig
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _FetchOpts:
+    """Bundled options for :func:`_fetch_entry`."""
+
+    ref: str = "main"
+    scheme: str = "https"
+    headers: dict | None = None
+    resilient_get: Callable | None = None
 
 
 class ArtifactoryRegistryClient:
@@ -65,10 +76,12 @@ class ArtifactoryRegistryClient:
             owner=owner,
             repo=repo,
             file_path=file_path,
-            ref=ref,
-            scheme=self._config.scheme,
-            headers=self._config.get_headers(),
-            resilient_get=resilient_get,
+            opts=_FetchOpts(
+                ref=ref,
+                scheme=self._config.scheme,
+                headers=self._config.get_headers(),
+                resilient_get=resilient_get,
+            ),
         )
 
 
@@ -85,8 +98,7 @@ def fetch_entry_from_archive(
     file_path: str,
     ref: str = "main",
     scheme: str = "https",
-    headers: dict | None = None,
-    resilient_get: Callable | None = None,
+    **kwargs,
 ) -> bytes | None:
     """Fetch a single file from an Artifactory-proxied archive.
 
@@ -102,10 +114,12 @@ def fetch_entry_from_archive(
         owner=owner,
         repo=repo,
         file_path=file_path,
-        ref=ref,
-        scheme=scheme,
-        headers=headers,
-        resilient_get=resilient_get,
+        opts=_FetchOpts(
+            ref=ref,
+            scheme=scheme,
+            headers=kwargs.get("headers"),
+            resilient_get=kwargs.get("resilient_get"),
+        ),
     )
 
 
@@ -120,10 +134,7 @@ def _fetch_entry(
     owner: str,
     repo: str,
     file_path: str,
-    ref: str,
-    scheme: str,
-    headers: dict | None,
-    resilient_get: Callable | None,
+    opts: _FetchOpts,
 ) -> bytes | None:
     """Core entry-download logic shared by the class and standalone helper."""
     from ..utils.github_host import build_artifactory_archive_url
@@ -145,20 +156,20 @@ def _fetch_entry(
         prefix,
         owner,
         repo,
-        ref,
-        scheme=scheme,
+        opts.ref,
+        scheme=opts.scheme,
     )
 
     # Root directory inside the archive is typically "{repo}-{ref}", but
     # hosting platforms may normalize refs (e.g. "feature/foo" -> "feature-foo").
-    root_prefixes: list[str] = [f"{repo}-{ref}"]
-    normalized_ref = ref.replace("/", "-")
-    if normalized_ref != ref:
+    root_prefixes: list[str] = [f"{repo}-{opts.ref}"]
+    normalized_ref = opts.ref.replace("/", "-")
+    if normalized_ref != opts.ref:
         normalized_root = f"{repo}-{normalized_ref}"
         if normalized_root not in root_prefixes:
             root_prefixes.append(normalized_root)
 
-    req_headers = headers or {}
+    req_headers = opts.headers or {}
 
     for archive_url in archive_urls:
         for root_prefix in root_prefixes:
@@ -166,8 +177,8 @@ def _fetch_entry(
             encoded_path = quote(f"{root_prefix}/{file_path}", safe="/")
             entry_url = f"{archive_url}!/{encoded_path}"
             try:
-                if resilient_get is not None:
-                    resp = resilient_get(entry_url, headers=req_headers, timeout=30)
+                if opts.resilient_get is not None:
+                    resp = opts.resilient_get(entry_url, headers=req_headers, timeout=30)
                 else:
                     resp = _requests.get(
                         entry_url,

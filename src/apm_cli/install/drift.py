@@ -19,16 +19,34 @@ Design constraints (see ``WIP/drift/06-final-plan.md``):
 * ASCII-only console output (Windows cp1252 safety).
 * Normalization strips line-ending differences, BOMs, and the APM
   ``Build ID`` header that legitimately changes on every recompile.
+
+Module layout
+-------------
+``drift.py`` (this file)
+    Scratch-dir lifecycle, :class:`CheckLogger`, package-materialization
+    helpers, and the :func:`run_replay` orchestrator.
+
+``_drift_types.py``
+    :class:`ReplayConfig`, :class:`DriftFinding`, :class:`CacheMissError` --
+    kept separate to avoid circular imports between the diff engine and the
+    replay orchestrator.
+
+``_drift_diff.py``
+    Pure diff engine: walks managed directories, compares normalized content,
+    emits :class:`DriftFinding` instances.
+
+``_drift_render.py``
+    Human-readable text, JSON, and SARIF renderers.
+
+All public names remain importable from ``apm_cli.install.drift``.
 """
 
 from __future__ import annotations
 
 import atexit
-import json
 import shutil
 import tempfile
 import tracemalloc
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -41,63 +59,24 @@ from apm_cli.utils.guards import _ReadOnlyProjectGuard
 if TYPE_CHECKING:
     from apm_cli.deps.lockfile import LockedDependency, LockFile
 
-
 # ---------------------------------------------------------------------------
-# Public dataclasses
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class ReplayConfig:
-    """Locked configuration for a drift replay run.
-
-    Frozen so callers cannot mutate it mid-replay -- any change requires
-    a new instance, which keeps the contract auditable.
-    """
-
-    project_root: Path
-    lockfile_path: Path
-    targets: frozenset[str] | None = None
-    cache_only: bool = True
-    no_hooks: bool = True
-    parallel_downloads: int = 1
-
-
-@dataclass(frozen=True)
-class DriftFinding:
-    """A single divergence between the replay scratch tree and the project."""
-
-    path: str
-    kind: str  # one of "modified" | "unintegrated" | "orphaned"
-    package: str = ""
-    inline_diff: str = ""
-
-
-# ---------------------------------------------------------------------------
-# Errors
-# ---------------------------------------------------------------------------
-
-
-class CacheMissError(RuntimeError):
-    """Raised when ``cache_only=True`` but a package is not in the cache."""
-
-
-# ---------------------------------------------------------------------------
-# Normalization helpers (operate on bytes; bytes-in / bytes-out)
+# Back-compat re-exports
 #
-# Re-exported from ``apm_cli.utils.normalization`` so existing callers and
-# tests that import ``_strip_build_id`` / ``_normalize`` from this module
-# keep working. The implementation lives in ``utils/`` so future callers
-# (policy linters, content-scan helpers) can reuse it without importing
-# the drift module.
+# Public types live in ``_drift_types`` (kept separate to avoid circular
+# imports between the diff engine and the replay orchestrator).
+#
+# Normalization helpers live in ``apm_cli.utils.normalization``; re-exported
+# here so callers and tests that import ``_strip_build_id`` / ``_normalize``
+# from this module keep working without changes.
 # ---------------------------------------------------------------------------
-
 from apm_cli.utils.normalization import (  # noqa: E402  -- re-exported for back-compat
     _normalize,
     _normalize_line_endings,
     _strip_bom,
     _strip_build_id,
 )
+
+from ._drift_types import CacheMissError, DriftFinding, ReplayConfig  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Scratch directory lifecycle
@@ -498,232 +477,18 @@ def run_replay(config: ReplayConfig, logger: CheckLogger) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Diff engine
+# Re-export diff engine and renderers (implementations live in sibling
+# private modules to keep this file under 500 lines).
+# All names remain importable from ``apm_cli.install.drift``.
 # ---------------------------------------------------------------------------
 
-_INLINE_DIFF_BYTE_CAP = 100 * 1024  # 100 KB
-
-
-def _governed_root_dirs(targets) -> set[str]:
-    """Return the set of top-level managed directory names to walk."""
-    roots: set[str] = {".apm"}
-    for t in targets or []:
-        root = getattr(t, "root_dir", None)
-        if root:
-            roots.add(str(root).split("/", 1)[0])
-    return roots
-
-
-def _walk_managed(root: Path, governed_roots: set[str]) -> dict[str, Path]:
-    """Return a mapping of project-relative posix paths to absolute paths."""
-    out: dict[str, Path] = {}
-    if not root.exists():
-        return out
-    for top in governed_roots:
-        base = root / top
-        if not base.exists():
-            continue
-        if base.is_file():
-            out[top] = base
-            continue
-        for p in base.rglob("*"):
-            if p.is_file():
-                rel = p.relative_to(root).as_posix()
-                out[rel] = p
-    # AGENTS.md is a flat top-level file in some target layouts.
-    agents_md = root / "AGENTS.md"
-    if agents_md.is_file():
-        out["AGENTS.md"] = agents_md
-    return out
-
-
-def _collect_tracked_files(lockfile: LockFile) -> dict[str, str]:
-    """Return ``{deployed_path: package_name}`` aggregating all sources."""
-    tracked: dict[str, str] = {}
-    for key, dep in lockfile.dependencies.items():
-        for path in dep.deployed_files or []:
-            tracked.setdefault(path, key)
-    for path in lockfile.local_deployed_files or []:
-        tracked.setdefault(path, ".")
-    return tracked
-
-
-def _inline_diff_for(scratch_path: Path, project_path: Path) -> str:
-    """Build an inline diff hint, capped to keep findings compact."""
-    try:
-        s_size = scratch_path.stat().st_size
-        p_size = project_path.stat().st_size
-    except OSError:
-        return ""
-    if s_size > _INLINE_DIFF_BYTE_CAP or p_size > _INLINE_DIFF_BYTE_CAP:
-        return "(file too large for inline diff; use 'git diff --no-index' to compare)"
-    return ""
-
-
-def diff_scratch_against_project(
-    scratch_root: Path,
-    project_root: Path,
-    lockfile: LockFile,
-    targets,
-) -> list[DriftFinding]:
-    """Compare the replay scratch tree against the project tree.
-
-    Three kinds of findings are emitted:
-
-    * ``modified``     -- file exists in both, normalized content differs.
-    * ``unintegrated`` -- file exists in scratch but not in project.
-    * ``orphaned``     -- file exists in project + tracked in lockfile
-      ``deployed_files`` but no longer in scratch.
-
-    Untracked extra files in governed directories are intentionally
-    ignored to avoid false positives from user-authored content.
-    """
-    scratch_root = scratch_root.resolve()
-    project_root = project_root.resolve()
-    governed = _governed_root_dirs(targets)
-    scratch_files = _walk_managed(scratch_root, governed)
-    project_files = _walk_managed(project_root, governed)
-    tracked = _collect_tracked_files(lockfile)
-
-    findings: list[DriftFinding] = []
-
-    for rel, scratch_path in sorted(scratch_files.items()):
-        project_path = project_files.get(rel)
-        if project_path is None:
-            findings.append(
-                DriftFinding(
-                    path=rel,
-                    kind="unintegrated",
-                    package=tracked.get(rel, ""),
-                )
-            )
-            continue
-        try:
-            s_bytes = _normalize(scratch_path.read_bytes())
-            p_bytes = _normalize(project_path.read_bytes())
-        except OSError as exc:
-            findings.append(
-                DriftFinding(
-                    path=rel,
-                    kind="modified",
-                    package=tracked.get(rel, ""),
-                    inline_diff=f"(read error: {exc})",
-                )
-            )
-            continue
-        if s_bytes != p_bytes:
-            findings.append(
-                DriftFinding(
-                    path=rel,
-                    kind="modified",
-                    package=tracked.get(rel, ""),
-                    inline_diff=_inline_diff_for(scratch_path, project_path),
-                )
-            )
-
-    for rel in sorted(project_files.keys()):
-        if rel in scratch_files:
-            continue
-        if rel in tracked:
-            findings.append(
-                DriftFinding(
-                    path=rel,
-                    kind="orphaned",
-                    package=tracked.get(rel, ""),
-                )
-            )
-        # else: untracked governed file -- ignore (user authored).
-
-    return findings
-
-
-# ---------------------------------------------------------------------------
-# Renderers
-# ---------------------------------------------------------------------------
-
-
-def render_drift_text(findings: list[DriftFinding], verbose: bool = False) -> str:
-    """Human-readable text rendering grouped by kind."""
-    if not findings:
-        return f"{STATUS_SYMBOLS['check']} No drift detected"
-
-    lines: list[str] = [
-        f"{STATUS_SYMBOLS['warning']} Drift detected: {len(findings)} file(s)",
-        "",
-    ]
-    by_kind: dict[str, list[DriftFinding]] = {}
-    for f in findings:
-        by_kind.setdefault(f.kind, []).append(f)
-
-    for kind in ("modified", "unintegrated", "orphaned"):
-        items = by_kind.get(kind, [])
-        if not items:
-            continue
-        lines.append(f"  {kind} ({len(items)}):")
-        for item in items:
-            suffix = f"  [{item.package}]" if item.package else ""
-            lines.append(f"    - {item.path}{suffix}")
-            if verbose and item.inline_diff:
-                lines.append(f"      {item.inline_diff}")
-        lines.append("")
-
-    lines.append(
-        f"  {STATUS_SYMBOLS['info']} Run 'apm install' to re-sync deployed files with the lockfile."
-    )
-
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def render_drift_json(findings: list[DriftFinding]) -> dict:
-    """Machine-readable JSON shape: ``{\"drift\": [...]}``."""
-    return {
-        "drift": [
-            {
-                "path": f.path,
-                "kind": f.kind,
-                "package": f.package,
-                "inline_diff": f.inline_diff,
-            }
-            for f in findings
-        ]
-    }
-
-
-def render_drift_sarif(findings: list[DriftFinding]) -> list[dict]:
-    """SARIF ``results`` array; rule IDs use ``apm/drift/<kind>``."""
-    results: list[dict] = []
-    for f in findings:
-        results.append(
-            {
-                "ruleId": f"apm/drift/{f.kind}",
-                "level": "warning" if f.kind != "modified" else "error",
-                "message": {"text": f"drift ({f.kind}): {f.path}"},
-                "locations": [
-                    {
-                        "physicalLocation": {
-                            "artifactLocation": {"uri": f.path},
-                        }
-                    }
-                ],
-                "properties": {"package": f.package},
-            }
-        )
-    return results
-
-
-# ---------------------------------------------------------------------------
-# CLI helper -- intentionally minimal so commands/audit.py can re-use it.
-# ---------------------------------------------------------------------------
-
-
-def render_drift(
-    findings: list[DriftFinding],
-    fmt: str = "text",
-    verbose: bool = False,
-) -> str:
-    """Single rendering entrypoint for callers that pick a format string."""
-    if fmt == "json":
-        return json.dumps(render_drift_json(findings), indent=2)
-    if fmt == "sarif":
-        return json.dumps({"results": render_drift_sarif(findings)}, indent=2)
-    return render_drift_text(findings, verbose=verbose)
+from ._drift_diff import (  # noqa: E402
+    _governed_root_dirs,
+    diff_scratch_against_project,
+)
+from ._drift_render import (  # noqa: E402
+    render_drift,
+    render_drift_json,
+    render_drift_sarif,
+    render_drift_text,
+)

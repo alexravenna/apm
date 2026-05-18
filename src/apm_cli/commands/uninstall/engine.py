@@ -6,6 +6,7 @@ from pathlib import Path
 from ...constants import APM_MODULES_DIR
 from ...deps.lockfile import LockFile
 from ...integration.mcp_integrator import MCPIntegrator
+from ...integration.skill_integrator.opts import SkillOpts as _SkillOpts
 from ...models.apm_package import DependencyReference
 from ...utils.path_security import PathTraversalError, safe_rmtree
 from ...utils.paths import portable_relpath
@@ -460,6 +461,85 @@ def _cleanup_transitive_orphans(
     return removed, actual_orphans
 
 
+def _build_managed_buckets(all_deployed_files, user_scope: bool, resolved_targets) -> dict | None:
+    """Partition deployed files into per-integrator buckets.
+
+    When *user_scope* is ``True``, also partitions against *resolved_targets*
+    so both ``.github/`` (legacy) and ``.copilot/`` prefixes are recognised.
+    Returns the bucket dict, or ``None`` when there are no deployed files.
+    """
+    from ...integration.base_integrator import BaseIntegrator
+
+    sync_managed = all_deployed_files or None
+    if sync_managed is None:
+        return None
+
+    buckets = BaseIntegrator.partition_managed_files(sync_managed)
+    if user_scope and resolved_targets:
+        scope_buckets = BaseIntegrator.partition_managed_files(
+            sync_managed, targets=resolved_targets
+        )
+        for bname, bpaths in scope_buckets.items():
+            existing = buckets.get(bname)
+            if existing is not None:
+                existing.update(bpaths)
+            else:
+                buckets[bname] = bpaths
+    return buckets
+
+
+def _phase2_reintegrate_packages(
+    apm_package, project_root, resolved_targets, integrators, dispatch, logger
+):
+    """Re-integrate primitives from each remaining installed package (Phase 2).
+
+    Iterates over the APM dependencies still present in *apm_package*, loads
+    their manifests, and runs each integrator's integrate method so primitives
+    from surviving packages are re-deployed after the uninstalled packages have
+    been cleaned up.
+    """
+    from ...models.apm_package import PackageInfo, validate_apm_package
+
+    for dep in apm_package.get_apm_dependencies():
+        dep_ref = dep if hasattr(dep, "repo_url") else None
+        if not dep_ref:
+            continue
+        install_path = dep_ref.get_install_path(Path(APM_MODULES_DIR))
+        if not install_path.exists():
+            continue
+
+        result = validate_apm_package(install_path)
+        pkg = result.package if result and result.package else None
+        if not pkg:
+            continue
+        pkg_info = PackageInfo(
+            package=pkg,
+            install_path=install_path,
+            dependency_ref=dep_ref,
+            package_type=result.package_type if result else None,
+        )
+
+        try:
+            for _target in resolved_targets:
+                for _prim_name in _target.primitives:
+                    _entry = dispatch.get(_prim_name)
+                    if not _entry or _entry.multi_target:
+                        continue
+                    getattr(integrators[_prim_name], _entry.integrate_method)(
+                        _target,
+                        pkg_info,
+                        project_root,
+                    )
+            integrators["skills"].integrate_package_skill(
+                pkg_info,
+                project_root,
+                _SkillOpts(targets=resolved_targets),
+            )
+        except Exception:
+            pkg_id = dep_ref.get_identity() if hasattr(dep_ref, "get_identity") else str(dep_ref)
+            logger.warning(f"Best-effort re-integration skipped for {pkg_id}")
+
+
 def _sync_integrations_after_uninstall(
     apm_package, project_root, all_deployed_files, logger, user_scope=False
 ):
@@ -471,7 +551,6 @@ def _sync_integrations_after_uninstall(
     from ...integration.base_integrator import BaseIntegrator
     from ...integration.dispatch import get_dispatch_table
     from ...integration.targets import resolve_targets
-    from ...models.apm_package import PackageInfo, validate_apm_package
 
     _dispatch = get_dispatch_table()
     _integrators = {name: entry.integrator_class() for name, entry in _dispatch.items()}
@@ -483,25 +562,7 @@ def _sync_integrations_after_uninstall(
         project_root, user_scope=user_scope, explicit_target=_explicit
     )
 
-    sync_managed = all_deployed_files if all_deployed_files else None
-    if sync_managed is not None:
-        # Partition against default KNOWN_TARGETS for legacy/project-scope
-        # paths, then merge with resolved targets for user-scope paths.
-        # This ensures both .github/ (legacy) and .copilot/ (resolved)
-        # prefixes are recognized during uninstall cleanup.
-        _buckets = BaseIntegrator.partition_managed_files(sync_managed)
-        if user_scope and _resolved_targets:
-            _scope_buckets = BaseIntegrator.partition_managed_files(
-                sync_managed, targets=_resolved_targets
-            )
-            for _bname, _bpaths in _scope_buckets.items():
-                _existing = _buckets.get(_bname)
-                if _existing is not None:
-                    _existing.update(_bpaths)
-                else:
-                    _buckets[_bname] = _bpaths
-    else:
-        _buckets = None
+    _buckets = _build_managed_buckets(all_deployed_files, user_scope, _resolved_targets)
 
     counts = {entry.counter_key: 0 for entry in _dispatch.values()}
 
@@ -549,6 +610,7 @@ def _sync_integrations_after_uninstall(
     # returned False.  Bypassing the bucket and scanning sync_managed
     # directly is the correct approach: no partition logic is involved.
     _cowork_skill_files: set = set()
+    sync_managed = all_deployed_files or None
     if sync_managed:
         from ...integration.copilot_cowork_paths import COWORK_URI_SCHEME
 
@@ -587,46 +649,9 @@ def _sync_integrations_after_uninstall(
     counts["hooks"] = result.get("files_removed", 0)
 
     # Phase 2: Re-integrate from remaining installed packages
-    _targets = _resolved_targets
-
-    for dep in apm_package.get_apm_dependencies():
-        dep_ref = dep if hasattr(dep, "repo_url") else None
-        if not dep_ref:
-            continue
-        install_path = dep_ref.get_install_path(Path(APM_MODULES_DIR))
-        if not install_path.exists():
-            continue
-
-        result = validate_apm_package(install_path)
-        pkg = result.package if result and result.package else None
-        if not pkg:
-            continue
-        pkg_info = PackageInfo(
-            package=pkg,
-            install_path=install_path,
-            dependency_ref=dep_ref,
-            package_type=result.package_type if result else None,
-        )
-
-        try:
-            for _target in _targets:
-                for _prim_name in _target.primitives:
-                    _entry = _dispatch.get(_prim_name)
-                    if not _entry or _entry.multi_target:
-                        continue
-                    getattr(_integrators[_prim_name], _entry.integrate_method)(
-                        _target,
-                        pkg_info,
-                        project_root,
-                    )
-            _integrators["skills"].integrate_package_skill(
-                pkg_info,
-                project_root,
-                targets=_targets,
-            )
-        except Exception:
-            pkg_id = dep_ref.get_identity() if hasattr(dep_ref, "get_identity") else str(dep_ref)
-            logger.warning(f"Best-effort re-integration skipped for {pkg_id}")
+    _phase2_reintegrate_packages(
+        apm_package, project_root, _resolved_targets, _integrators, _dispatch, logger
+    )
 
     return counts
 

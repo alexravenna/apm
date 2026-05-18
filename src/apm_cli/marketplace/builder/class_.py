@@ -1,24 +1,12 @@
-"""MarketplaceBuilder -- load, resolve, compose, and write marketplace.json.
+"""MarketplaceBuilder: dataclasses and class for the marketplace build pipeline.
 
-This module implements the full build pipeline:
-
-1. **Load** -- parse ``marketplace.yml`` via ``yml_schema.load_marketplace_yml``.
-2. **Resolve** -- for every package entry, call ``git ls-remote`` (via
-   ``RefResolver``) and determine the concrete tag + SHA.
-3. **Compose** -- produce an Anthropic-compliant ``marketplace.json`` dict
-   with all APM-only fields stripped.
-4. **Write** -- atomically write the JSON to disk (or skip on dry-run)
-   and produce a ``BuildReport`` with diff statistics.
-
-Hard rule: the output ``marketplace.json`` conforms byte-for-byte to
-Anthropic's schema.  No APM-specific keys, no extensions, no renamed
-fields.  ``packages`` in yml becomes ``plugins`` in json.
+Pipeline steps (load → resolve → compose → write) are in ``compose``,
+``metadata``, and ``resolve_helpers`` sibling modules.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -35,9 +23,6 @@ from ..errors import (
 from ..output_mappers import (
     MARKETPLACE_OUTPUT_MAPPERS,
     MapperResult,
-)
-from ..output_mappers import (
-    _is_display_version as _mapper_is_display_version,
 )
 from ..output_mappers import (
     _subtract_plugin_root as _mapper_subtract_plugin_root,
@@ -247,14 +232,6 @@ class BuildOptions:
 # ---------------------------------------------------------------------------
 # Builder
 # ---------------------------------------------------------------------------
-
-# 40-char hex SHA pattern
-_SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
-
-
-def _is_display_version(version: str | None) -> bool:
-    """Return True if *version* looks like a fixed display version, not a range."""
-    return _mapper_is_display_version(version)
 
 
 def _subtract_plugin_root(source: str, plugin_root: str) -> str:
@@ -485,7 +462,6 @@ class MarketplaceBuilder:
     # -- diff ---------------------------------------------------------------
 
     @staticmethod
-    @staticmethod
     def _compute_diff(
         old_json: dict[str, Any] | None, new_json: dict[str, Any]
     ) -> tuple[int, int, int, int]:
@@ -494,11 +470,9 @@ class MarketplaceBuilder:
     # -- atomic write -------------------------------------------------------
 
     @staticmethod
-    @staticmethod
     def _serialize_json(data: dict[str, Any]) -> str:
         return _compose._serialize_json(data)
 
-    @staticmethod
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
         return _compose._atomic_write(path, content)
@@ -510,11 +484,6 @@ class MarketplaceBuilder:
 
     def build(self) -> BuildReport:
         return _compose.build(self)
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _strip_ref_prefix(refname: str) -> str:

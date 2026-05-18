@@ -22,13 +22,220 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import click
 
 if TYPE_CHECKING:
     from apm_cli.models.dependency.mcp import MCPDependency
+
+
+@dataclass
+class _EmitSuccessCtx:
+    """Bundled arguments for :func:`_emit_local_bundle_success`."""
+
+    deployed: list
+    skipped: int
+    staged_instructions: list
+    targets: Any
+    bundle_mcp_present: bool
+    dry_run: bool
+    bundle_info: Any
+    project_root: Path
+    global_: bool
+    logger: Any
+
+
+def _reject_local_bundle_flags(bundle_arg: str, rejected_flags: dict[str, object]) -> None:
+    """Raise when local-bundle-incompatible flags were supplied."""
+    bad = [name for name, value in rejected_flags.items() if value]
+    if bad:
+        raise click.UsageError(
+            "The following flag(s) are not valid with a local bundle install "
+            f"({bundle_arg}): {', '.join(bad)}.\n"
+            "Local-bundle install is an imperative deploy and does not "
+            "interact with the dependency resolver, MCP, registry, or "
+            "policy machinery."
+        )
+
+
+def _resolve_bundle_targets(
+    *, bundle_info, project_root: Path, target, global_: bool, legacy_skill_paths: bool, logger
+):
+    """Resolve install targets and apply bundle mismatch warnings."""
+    from ..bundle.local_bundle import check_target_mismatch
+    from ..integration.targets import apply_legacy_skill_paths, resolve_targets
+
+    explicit = target if target else None
+    targets = resolve_targets(
+        project_root,
+        user_scope=global_,
+        explicit_target=explicit,
+    )
+    if not targets:
+        logger.warning(
+            "No active targets resolved -- nothing will be deployed. "
+            "Pass --target to select one explicitly."
+        )
+        return []
+
+    if legacy_skill_paths:
+        targets = apply_legacy_skill_paths(targets)
+
+    warning = check_target_mismatch(
+        bundle_targets=bundle_info.pack_targets,
+        install_targets=[t.name for t in targets],
+    )
+    if warning:
+        logger.warning(warning)
+    return targets
+
+
+def _detect_bundle_mcp_presence(bundle_info) -> bool:
+    """Return whether the bundle declares a top-level .mcp.json file."""
+    bundle_mcp_present = False
+    if bundle_info.lockfile:
+        pack = bundle_info.lockfile.get("pack") or {}
+        bundle_files = pack.get("bundle_files") or {}
+        if isinstance(bundle_files, dict):
+            bundle_mcp_present = any(str(key).lower() == ".mcp.json" for key in bundle_files)
+    if not bundle_mcp_present and bundle_info.source_dir is not None:
+        bundle_mcp_present = any(
+            path.name.lower() == ".mcp.json"
+            for path in bundle_info.source_dir.iterdir()
+            if path.is_file()
+        )
+    return bundle_mcp_present
+
+
+def _render_local_bundle_dry_run(deployed: list[str], logger) -> None:
+    """Render dry-run output for a local bundle install."""
+    logger.dry_run_notice(f"Would deploy {len(deployed)} file(s) from local bundle")
+    for path in deployed:
+        logger.tree_item(path)
+
+
+def _persist_local_bundle_lockfile(
+    *,
+    project_root: Path,
+    deployed: list[str],
+    deployed_hashes: dict[str, str],
+    legacy_skill_paths: bool,
+    logger,
+) -> None:
+    """Persist local bundle deployment state into the lockfile."""
+    if not deployed:
+        return
+
+    from ..deps.lockfile import LockFile, get_lockfile_path, migrate_lockfile_if_needed
+
+    migrate_lockfile_if_needed(project_root)
+    lockfile_path = get_lockfile_path(project_root)
+    lockfile = LockFile.read(lockfile_path) or LockFile()
+    existing = set(lockfile.local_deployed_files)
+    existing.update(deployed)
+    lockfile.local_deployed_files = sorted(existing)
+    existing_hashes = dict(lockfile.local_deployed_file_hashes)
+    existing_hashes.update(deployed_hashes)
+    lockfile.local_deployed_file_hashes = existing_hashes
+
+    if not legacy_skill_paths:
+        _migrate_legacy_skill_paths(lockfile, lockfile_path, project_root, logger)
+
+    lockfile.write(lockfile_path)
+
+
+def _migrate_legacy_skill_paths(lockfile, lockfile_path: Path, project_root: Path, logger) -> None:
+    """Auto-migrate legacy per-client skill paths after bundle deployment."""
+    del lockfile_path
+    from ..utils.console import _rich_error, _rich_info
+    from .skill_path_migration import (
+        COLLISION_DETAIL_TEMPLATE,
+        COLLISION_HEADER_TEMPLATE,
+        COLLISION_HINT,
+        MIGRATION_SUMMARY_TEMPLATE,
+    )
+    from .skill_path_migration import (
+        check_collisions as _check_coll,
+    )
+    from .skill_path_migration import (
+        detect_legacy_skill_deployments as _detect_legacy,
+    )
+    from .skill_path_migration import (
+        execute_migration as _exec_mig,
+    )
+
+    plans = _detect_legacy(lockfile, project_root)
+    if not plans:
+        return
+
+    collisions = _check_coll(plans, project_root)
+    if collisions:
+        _rich_error(
+            COLLISION_HEADER_TEMPLATE.format(count=len(collisions)),
+            symbol="error",
+        )
+        for plan in plans:
+            for collision_detail in collisions:
+                if plan.dst_path in collision_detail:
+                    _rich_error(
+                        COLLISION_DETAIL_TEMPLATE.format(
+                            dst_path=plan.dst_path,
+                            src_path=plan.src_path,
+                            dep_name=plan.dep_name,
+                        ),
+                        symbol="error",
+                    )
+                    break
+        _rich_info(COLLISION_HINT, symbol="info")
+        return
+
+    migration_result = _exec_mig(plans, lockfile, project_root)
+    total = len(migration_result.deleted) + len(migration_result.skipped_no_file)
+    if total:
+        _rich_info(MIGRATION_SUMMARY_TEMPLATE.format(count=total), symbol="info")
+    if getattr(logger, "verbose", False) and migration_result.deleted:
+        for deleted_path in migration_result.deleted:
+            _rich_info(f"  removed {deleted_path}", symbol="info")
+
+
+def _emit_local_bundle_success(ctx: _EmitSuccessCtx) -> None:
+    """Emit post-install success messages and optional MCP wiring."""
+    deployed = ctx.deployed
+    skipped = ctx.skipped
+    staged_instructions = ctx.staged_instructions
+    targets = ctx.targets
+    bundle_mcp_present = ctx.bundle_mcp_present
+    dry_run = ctx.dry_run
+    bundle_info = ctx.bundle_info
+    project_root = ctx.project_root
+    global_ = ctx.global_
+    logger = ctx.logger
+    msg = f"Installed {len(deployed)} file(s) from local bundle"
+    if skipped:
+        msg += f" ({skipped} skipped)"
+    logger.success(msg)
+
+    if staged_instructions and not dry_run:
+        target_names = ", ".join(sorted({t.name for t in targets}))
+        logger.warning(
+            f"Bundle staged {len(staged_instructions)} instruction(s) "
+            f"for compile (target: {target_names}). Run 'apm compile' "
+            "to merge them into AGENTS.md / GEMINI.md / equivalent. "
+            "Reference: https://microsoft.github.io/apm/guides/compilation/"
+        )
+
+    if bundle_mcp_present and not dry_run and bundle_info.source_dir is not None:
+        _wire_bundle_mcp_servers(
+            bundle_dir=bundle_info.source_dir,
+            targets=targets,
+            project_root=project_root,
+            user_scope=global_,
+            verbose=getattr(logger, "verbose", False),
+            logger=logger,
+        )
 
 
 def install_local_bundle(
@@ -39,11 +246,8 @@ def install_local_bundle(
     global_: bool,
     force: bool,
     dry_run: bool,
-    verbose: bool,
-    alias: str | None,
     logger,
-    legacy_skill_paths: bool = False,
-    rejected_flags: dict[str, object],
+    **kwargs,
 ) -> None:
     """Deploy a local bundle into project / user scope.
 
@@ -51,27 +255,18 @@ def install_local_bundle(
     targets, deploys files, and persists ``local_deployed_files`` to the
     (project or user) lockfile.  Cleans up tarball extraction on exit.
     """
-    from ..bundle.local_bundle import (
-        check_target_mismatch,
-        verify_bundle_integrity,
-    )
+    verbose: bool = kwargs.get("verbose", False)
+    alias: str | None = kwargs.get("alias")
+    legacy_skill_paths: bool = kwargs.get("legacy_skill_paths", False)
+    rejected_flags: dict[str, object] = kwargs.get("rejected_flags", {})
+    from ..bundle.local_bundle import verify_bundle_integrity
     from ..core.scope import InstallScope
-    from ..deps.lockfile import LockFile, get_lockfile_path
-    from ..install.services import integrate_local_bundle
-    from ..integration.targets import resolve_targets
+    from ..install.services import LocalBundleOpts, integrate_local_bundle
 
     # Reject incompatible flags with a single consolidated error.  Preserve
     # dict insertion order (matches the order options are declared on the
     # CLI command) rather than alphabetising -- M-cli-3.
-    bad = [name for name, value in rejected_flags.items() if value]
-    if bad:
-        raise click.UsageError(
-            "The following flag(s) are not valid with a local bundle install "
-            f"({bundle_arg}): {', '.join(bad)}.\n"
-            "Local-bundle install is an imperative deploy and does not "
-            "interact with the dependency resolver, MCP, registry, or "
-            "policy machinery."
-        )
+    _reject_local_bundle_flags(bundle_arg, rejected_flags)
 
     # ``verbose`` is consumed by the InstallLogger on construction (the
     # CLI seam wires it in) -- the handler doesn't need to gate calls on
@@ -101,31 +296,16 @@ def install_local_bundle(
             logger.verbose_detail("Bundle integrity verified")
 
         # Resolve targets and warn on bundle/install target mismatch.
-        explicit = target if target else None
-        targets = resolve_targets(
-            project_root,
-            user_scope=global_,
-            explicit_target=explicit,
+        targets = _resolve_bundle_targets(
+            bundle_info=bundle_info,
+            project_root=project_root,
+            target=target,
+            global_=global_,
+            legacy_skill_paths=legacy_skill_paths,
+            logger=logger,
         )
         if not targets:
-            logger.warning(
-                "No active targets resolved -- nothing will be deployed. "
-                "Pass --target to select one explicitly."
-            )
             return
-
-        # Apply --legacy-skill-paths override to resolved targets.
-        if legacy_skill_paths:
-            from ..integration.targets import apply_legacy_skill_paths
-
-            targets = apply_legacy_skill_paths(targets)
-
-        warning = check_target_mismatch(
-            bundle_targets=bundle_info.pack_targets,
-            install_targets=[t.name for t in targets],
-        )
-        if warning:
-            logger.warning(warning)
 
         result = integrate_local_bundle(
             bundle_info,
@@ -133,10 +313,12 @@ def install_local_bundle(
             targets=targets,
             force=force,
             dry_run=dry_run,
-            diagnostics=None,
-            logger=logger,
-            scope=scope,
-            alias=alias,
+            opts=LocalBundleOpts(
+                diagnostics=None,
+                logger=logger,
+                scope=scope,
+                alias=alias,
+            ),
         )
 
         deployed = result.get("deployed_files", [])
@@ -158,136 +340,34 @@ def install_local_bundle(
             )
         ]
         # Issue #1207 D2.c: detect bundle-level ``.mcp.json`` so the
-        # post-deploy block can route it through ``MCPIntegrator.install``
-        # (each resolved target's native MCP config gets the servers in
-        # its own format/location).  ``.mcp.json`` itself is metadata and
-        # never deployed verbatim.
-        bundle_mcp_present = False
-        if bundle_info.lockfile:
-            pack = bundle_info.lockfile.get("pack") or {}
-            bf = pack.get("bundle_files") or {}
-            if isinstance(bf, dict):
-                bundle_mcp_present = any(str(k).lower() == ".mcp.json" for k in bf)
-        # Fallback: walk bundle source dir if lockfile manifest is absent.
-        if not bundle_mcp_present and bundle_info.source_dir is not None:
-            bundle_mcp_present = any(
-                p.name.lower() == ".mcp.json"
-                for p in bundle_info.source_dir.iterdir()
-                if p.is_file()
-            )
+        # post-deploy block can route it through ``MCPIntegrator.install``.
+        bundle_mcp_present = _detect_bundle_mcp_presence(bundle_info)
 
         if dry_run:
-            logger.dry_run_notice(f"Would deploy {len(deployed)} file(s) from local bundle")
-            # IM5: surface the file list in default mode (not just verbose)
-            # so users see WHICH files would deploy.
-            for f in deployed:
-                logger.tree_item(f)
+            _render_local_bundle_dry_run(deployed, logger)
             return
 
-        # Persist into project lockfile -- never mutate apm.yml (per design).
-        if deployed:
-            from ..deps.lockfile import migrate_lockfile_if_needed
-
-            migrate_lockfile_if_needed(project_root)
-            lockfile_path = get_lockfile_path(project_root)
-            lockfile = LockFile.read(lockfile_path) or LockFile()
-            existing = set(lockfile.local_deployed_files)
-            existing.update(deployed)
-            lockfile.local_deployed_files = sorted(existing)
-            existing_hashes = dict(lockfile.local_deployed_file_hashes)
-            existing_hashes.update(deployed_hashes)
-            lockfile.local_deployed_file_hashes = existing_hashes
-
-            # Auto-migrate legacy per-client skill paths (#737).
-            # After deploying new .agents/skills/ files, detect and clean up
-            # any legacy paths (e.g. .github/skills/) still recorded in the
-            # lockfile from a previous --legacy-skill-paths install.
-            if not legacy_skill_paths:
-                from ..utils.console import _rich_error, _rich_info
-                from .skill_path_migration import (
-                    COLLISION_DETAIL_TEMPLATE,
-                    COLLISION_HEADER_TEMPLATE,
-                    COLLISION_HINT,
-                    MIGRATION_SUMMARY_TEMPLATE,
-                )
-                from .skill_path_migration import (
-                    check_collisions as _check_coll,
-                )
-                from .skill_path_migration import (
-                    detect_legacy_skill_deployments as _detect_legacy,
-                )
-                from .skill_path_migration import (
-                    execute_migration as _exec_mig,
-                )
-
-                _plans = _detect_legacy(lockfile, project_root)
-                if _plans:
-                    _colls = _check_coll(_plans, project_root)
-                    if _colls:
-                        # H2: collision is an error.
-                        _rich_error(
-                            COLLISION_HEADER_TEMPLATE.format(count=len(_colls)),
-                            symbol="error",
-                        )
-                        # M2: enumerate each collision (parity with pipeline).
-                        for _plan in _plans:
-                            for _cd in _colls:
-                                if _plan.dst_path in _cd:
-                                    _rich_error(
-                                        COLLISION_DETAIL_TEMPLATE.format(
-                                            dst_path=_plan.dst_path,
-                                            src_path=_plan.src_path,
-                                            dep_name=_plan.dep_name,
-                                        ),
-                                        symbol="error",
-                                    )
-                                    break
-                        _rich_info(COLLISION_HINT, symbol="info")
-                    else:
-                        _mig_result = _exec_mig(_plans, lockfile, project_root)
-                        _total = len(_mig_result.deleted) + len(_mig_result.skipped_no_file)
-                        if _total:
-                            _rich_info(
-                                MIGRATION_SUMMARY_TEMPLATE.format(count=_total),
-                                symbol="info",
-                            )
-                        if getattr(logger, "verbose", False) and _mig_result.deleted:
-                            for _dp in _mig_result.deleted:
-                                _rich_info(f"  removed {_dp}", symbol="info")
-
-            lockfile.write(lockfile_path)
-
-        msg = f"Installed {len(deployed)} file(s) from local bundle"
-        if skipped:
-            msg += f" ({skipped} skipped)"
-        logger.success(msg)
-
-        # Issue #1207 D2.b: post-install compile hint for staged instructions.
-        if staged_instructions and not dry_run:
-            target_names = ", ".join(sorted({t.name for t in targets}))
-            logger.warning(
-                f"Bundle staged {len(staged_instructions)} instruction(s) "
-                f"for compile (target: {target_names}). Run 'apm compile' "
-                "to merge them into AGENTS.md / GEMINI.md / equivalent. "
-                "Reference: https://microsoft.github.io/apm/guides/compilation/"
-            )
-
-        # Issue #1207 D2.c: route bundle ``.mcp.json`` (Anthropic plugin
-        # format) through the MCP integrator so each resolved target's
-        # native MCP config gets the servers in its own format and
-        # location.  ``.mcp.json`` is Claude-Code-native; Copilot,
-        # Cursor, OpenCode, Gemini, etc. each have their own MCP config
-        # conventions, and ``MCPIntegrator.install`` handles per-target
-        # dispatch (same code path used for ``apm.yml mcp_dependencies``).
-        if bundle_mcp_present and not dry_run and bundle_info.source_dir is not None:
-            _wire_bundle_mcp_servers(
-                bundle_dir=bundle_info.source_dir,
+        _persist_local_bundle_lockfile(
+            project_root=project_root,
+            deployed=deployed,
+            deployed_hashes=deployed_hashes,
+            legacy_skill_paths=legacy_skill_paths,
+            logger=logger,
+        )
+        _emit_local_bundle_success(
+            _EmitSuccessCtx(
+                deployed=deployed,
+                skipped=skipped,
+                staged_instructions=staged_instructions,
                 targets=targets,
+                bundle_mcp_present=bundle_mcp_present,
+                dry_run=dry_run,
+                bundle_info=bundle_info,
                 project_root=project_root,
-                user_scope=global_,
-                verbose=getattr(logger, "verbose", False),
+                global_=global_,
                 logger=logger,
             )
+        )
 
     finally:
         # Tarball cleanup (caller-owned per LocalBundleInfo contract).

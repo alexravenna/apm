@@ -15,13 +15,28 @@ import re
 import shutil
 from pathlib import Path
 
+import click
+
 from apm_cli.core.null_logger import NullCommandLogger
+from apm_cli.utils import console as _console_utils
 from apm_cli.utils.console import (
     _rich_error,
     _rich_info,
 )
 
 _log = logging.getLogger(__name__)
+
+
+def _echo_gate_message(message: str, *, level: str, symbol: str | None = None) -> None:
+    """Emit gate diagnostics on stdout even if the shared console was redirected."""
+    if level == "error":
+        _rich_error(message, symbol=symbol)
+    else:
+        _rich_info(message, symbol=symbol)
+    if getattr(_console_utils, "_console_stderr", False):
+        status_symbols = getattr(_console_utils, "STATUS_SYMBOLS", {})
+        prefix = f"{status_symbols[symbol]} " if symbol in status_symbols else ""
+        click.echo(f"{prefix}{message}")
 
 
 def _detect_runtimes(scripts: dict) -> list[str]:
@@ -247,11 +262,12 @@ def _gate_project_scoped_runtimes(
             # then the structured error body. symbol="" suppresses the
             # auto-prefix on the body because the exception text already
             # begins with "[x] ..." (see core/errors.py).
-            _rich_error(
+            _echo_gate_message(
                 "Skipping all MCP config writes -- apm.yml 'targets' field is invalid.",
+                level="error",
                 symbol="error",
             )
-            _rich_error(str(exc), symbol="")
+            _echo_gate_message(str(exc), level="error", symbol="")
             _log.debug(
                 "parse_targets_field failed; failing closed (no MCP writes)",
                 exc_info=True,
@@ -278,22 +294,23 @@ def _gate_project_scoped_runtimes(
         tokens = [flag] if isinstance(flag, str) else list(flag)
         flag = [RUNTIME_TO_CANONICAL_TARGET.get(t, t) for t in tokens]
 
+    if flag is None and apm_config is None and project_root is None:
+        return target_runtimes
+
     # --- step 3: delegate to the canonical v2 resolver -------------
-    # This is the same call the `apm install` skills phase makes at
-    # install/phases/targets.py:233. It enforces the strict
-    # flag > yaml > signals chain and raises NoHarnessError /
-    # AmbiguousHarnessError on greenfield / under-disambiguated
-    # projects -- the ASYMMETRY closed by this PR is that the gate
-    # used to silently fall back to [copilot] in those cases.
+    # When the caller supplied explicit target intent (flag or apm.yml),
+    # mirror the canonical install target resolver. Otherwise keep the
+    # already-detected runtime set unchanged.
     root = project_root or Path.cwd()
     try:
         resolved = resolve_targets(root, flag=flag, yaml_targets=yaml_targets)
     except (NoHarnessError, AmbiguousHarnessError) as exc:
-        _rich_error(
+        _echo_gate_message(
             "Skipping all MCP config writes -- could not resolve active targets.",
+            level="error",
             symbol="error",
         )
-        _rich_error(str(exc), symbol="")
+        _echo_gate_message(str(exc), level="error", symbol="")
         _log.debug(
             "resolve_targets failed; failing closed (no MCP writes)",
             exc_info=True,
@@ -316,8 +333,9 @@ def _gate_project_scoped_runtimes(
         # widens that contract we surface "<none>" rather than render
         # "(active targets: )" which reads as a renderer bug.
         active_csv = ", ".join(sorted(active)) or "<none>"
-        _rich_info(
+        _echo_gate_message(
             f"Skipped MCP config for {', '.join(dropped)}  (active targets: {active_csv})",
+            level="info",
             symbol="info",
         )
         _log.debug(

@@ -7,6 +7,13 @@ import click
 
 from ..core.command_logger import CommandLogger
 from ._helpers import _get_console
+from ._mcp_show import (
+    _collect_deployment_types,
+    _get_server_version,
+    _render_install_table,
+    _render_packages_table,
+    _render_remotes_table,
+)
 
 MCP_REGISTRY_ENV = "MCP_REGISTRY_URL"
 
@@ -259,22 +266,17 @@ def show(ctx, server_name, verbose):
         # Main server information in professional table format
         name = server_info.get("name", "Unknown")
         description = server_info.get("description", "No description available")
-
-        # Get key metadata
-        version = "Unknown"
-        if "version_detail" in server_info:
-            version = server_info["version_detail"].get("version", "Unknown")
-        elif "version" in server_info:
-            version = server_info["version"]
-
+        version = _get_server_version(server_info)
         repo_url = "Unknown"
         if "repository" in server_info:
             repo_url = server_info["repository"].get("url", "Unknown")
 
+        remotes = server_info.get("remotes", [])
+        packages = server_info.get("packages", [])
+
         # Professional server info table with consistent styling
         from rich.table import Table
 
-        # Main server information table
         info_table = Table(
             title=f" MCP Server: {name}",
             show_header=True,
@@ -291,105 +293,19 @@ def show(ctx, server_name, verbose):
         if "id" in server_info:
             info_table.add_row("Registry ID", server_info["id"][:8] + "...")
 
-        # Add deployment type information
-        remotes = server_info.get("remotes", [])
-        packages = server_info.get("packages", [])
-
-        deployment_info = []
-        if remotes:
-            for remote in remotes:
-                transport_type = remote.get("transport_type", "unknown")
-                if transport_type == "sse":
-                    deployment_info.append(" Remote SSE Endpoint")
-        if packages:
-            deployment_info.append(" Local Package")
-
+        deployment_info = _collect_deployment_types(remotes, packages)
         if deployment_info:
             info_table.add_row("Deployment Type", " + ".join(deployment_info))
 
         console.print(info_table)
 
-        # Show remote endpoints if available
         if remotes:
-            remote_table = Table(
-                title=" Remote Endpoints",
-                show_header=True,
-                header_style="bold cyan",
-                border_style="cyan",
-            )
-            remote_table.add_column("Type", style="yellow", width=10)
-            remote_table.add_column("URL", style="white", min_width=40)
-            remote_table.add_column("Features", style="cyan", min_width=20)
+            _render_remotes_table(console, remotes, name)
 
-            for remote in remotes:
-                transport_type = remote.get("transport_type", "unknown")
-                url = remote.get("url", "unknown")
-
-                # Describe features/limitations of remote endpoints
-                features = "Hosted by provider"
-                if "github" in name.lower():
-                    features = "No toolset customization"
-
-                remote_table.add_row(transport_type.upper(), url, features)
-
-            console.print(remote_table)
-
-        # Installation packages in consistent table format
         if packages:
-            pkg_table = Table(
-                title=" Local Packages",
-                show_header=True,
-                header_style="bold cyan",
-                border_style="cyan",
-            )
-            pkg_table.add_column("Registry", style="yellow", width=10)
-            pkg_table.add_column("Package", style="white", min_width=25)
-            pkg_table.add_column("Runtime", style="cyan", width=8, justify="center")
-            pkg_table.add_column("Features", style="green", min_width=20)
+            _render_packages_table(console, packages, name)
 
-            for pkg in packages:
-                registry_name = pkg.get("registry_name", "unknown")
-                pkg_name = pkg.get("name", "unknown")
-                runtime_hint = pkg.get("runtime_hint", " --")
-
-                # Describe features of local packages
-                features = "Full configuration control"
-                if "github" in name.lower():
-                    features = "Supports GITHUB_TOOLSETS"
-
-                # Truncate long package names intelligently
-                if len(pkg_name) > 25:
-                    pkg_name = pkg_name[:22] + "..."
-
-                pkg_table.add_row(registry_name, pkg_name, runtime_hint, features)
-
-            console.print(pkg_table)
-
-        # Installation instructions in structured table format
-        install_name = server_info.get("name", server_name)
-        install_table = Table(
-            title="* Installation Guide",
-            show_header=True,
-            header_style="bold cyan",
-            border_style="green",
-        )
-        install_table.add_column("Step", style="bold white", width=5)
-        install_table.add_column("Action", style="white", min_width=30)
-        install_table.add_column("Command/Config", style="cyan", min_width=25)
-
-        install_table.add_row(
-            "1",
-            "Add to apm.yml dependencies",
-            f"[yellow]mcp:[/yellow] [cyan]- {install_name}[/cyan]",
-        )
-        install_table.add_row("2", "Install dependencies", "[bold cyan]apm install[/bold cyan]")
-        install_table.add_row(
-            "3",
-            "Direct install (coming soon)",
-            f"[bold cyan]apm install {install_name}[/bold cyan]",
-        )
-
-        console.print(install_table)
+        _render_install_table(console, server_info.get("name", server_name))
 
     except Exception as e:
         try:

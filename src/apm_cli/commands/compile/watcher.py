@@ -1,16 +1,115 @@
 """APM compile watch mode."""
 
-from __future__ import annotations
-
+import sys
 import time
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
 
 from ...compilation import AgentsCompiler, CompilationConfig
 from ...constants import AGENTS_MD_FILENAME, APM_DIR, APM_YML_FILENAME
 from ...core.command_logger import CommandLogger
 
-if TYPE_CHECKING:
-    from ...core.target_detection import CompileTargetType
+_WATCH_PATHS: tuple[tuple[str, bool], ...] = (
+    (APM_DIR, True),
+    (".github/instructions", True),
+    (".github/agents", True),
+    (".github/chatmodes", True),
+)
+
+
+def _build_watch_config(output, chatmode, no_links, dry_run):
+    return CompilationConfig.from_apm_yml(
+        output_path=output if output != AGENTS_MD_FILENAME else None,
+        chatmode=chatmode,
+        resolve_links=not no_links if no_links else None,
+        dry_run=dry_run,
+    )
+
+
+def _log_compile_result(logger, result, *, dry_run: bool, prefix: str):
+    if result.success:
+        message = f"{prefix} successful (dry run)" if dry_run else f"{prefix}: {result.output_path}"
+        logger.success(message, symbol="sparkles")
+        return
+    logger.error(f"{prefix} failed")
+    for error in result.errors:
+        logger.error(f"  {error}")
+
+
+def _run_compile(output, chatmode, no_links, dry_run, logger, *, prefix: str):
+    config = _build_watch_config(output, chatmode, no_links, dry_run)
+    result = AgentsCompiler(".").compile(config, logger=logger)
+    _log_compile_result(logger, result, dry_run=dry_run, prefix=prefix)
+
+
+class _APMFileHandler:
+    def __init__(self, base_handler, output, chatmode, no_links, dry_run, logger):
+        self._handler = base_handler
+        self.output = output
+        self.chatmode = chatmode
+        self.no_links = no_links
+        self.dry_run = dry_run
+        self.logger = logger
+        self.last_compile = 0.0
+        self.debounce_delay = 1.0
+
+    def build(self):
+        parent = self
+
+        class APMFileHandler(self._handler):
+            def on_modified(self, event):
+                if event.is_directory or not _is_relevant_watch_file(event.src_path):
+                    return
+                current_time = time.time()
+                if current_time - parent.last_compile < parent.debounce_delay:
+                    return
+                parent.last_compile = current_time
+                parent.logger.progress(f"File changed: {event.src_path}", symbol="eyes")
+                parent.logger.progress("Recompiling...", symbol="gear")
+                try:
+                    _run_compile(
+                        parent.output,
+                        parent.chatmode,
+                        parent.no_links,
+                        parent.dry_run,
+                        parent.logger,
+                        prefix="Recompiled to",
+                    )
+                except Exception as exc:
+                    parent.logger.error(f"Error during recompilation: {exc}")
+
+        return APMFileHandler()
+
+
+def _is_relevant_watch_file(src_path: str) -> bool:
+    return src_path.endswith(".md") or src_path.endswith(APM_YML_FILENAME)
+
+
+def _schedule_watch_paths(observer, event_handler):
+    watch_paths: list[str] = []
+    for path, recursive in _WATCH_PATHS:
+        if not Path(path).exists():
+            continue
+        observer.schedule(event_handler, path, recursive=recursive)
+        watch_paths.append(f"{path}/")
+    if Path(APM_YML_FILENAME).exists():
+        observer.schedule(event_handler, ".", recursive=False)
+        watch_paths.append(APM_YML_FILENAME)
+    return watch_paths
+
+
+def _run_initial_compile(output, chatmode, no_links, dry_run, logger):
+    logger.progress("Performing initial compilation...", symbol="gear")
+    result = AgentsCompiler(".").compile(_build_watch_config(output, chatmode, no_links, dry_run))
+    if result.success:
+        if dry_run:
+            logger.success("Initial compilation successful (dry run)", symbol="sparkles")
+        else:
+            logger.success(f"Initial compilation complete: {result.output_path}", symbol="sparkles")
+        return
+    logger.error("Initial compilation failed")
+    for error in result.errors:
+        logger.error(f"  [x] {error}")
+
 
 
 def _format_target_label(
@@ -140,50 +239,20 @@ def _watch_mode(
     to all families on every recompile (#1345).
     """
     logger = CommandLogger("compile-watch", verbose=verbose, dry_run=dry_run)
-
     try:
-        from pathlib import Path
-
         from watchdog.events import FileSystemEventHandler
         from watchdog.observers import Observer
 
-        # Adapt the test-friendly module-level handler to watchdog's
-        # FileSystemEventHandler base so Observer.schedule() accepts it.
-        class _WatchdogAdapter(APMFileHandler, FileSystemEventHandler):
-            pass
-
-        event_handler = _WatchdogAdapter(
+        observer = Observer()
+        event_handler = _APMFileHandler(
+            FileSystemEventHandler,
             output,
             chatmode,
             no_links,
             dry_run,
             logger,
-            effective_target=effective_target,
-        )
-        observer = Observer()
-
-        watch_paths = []
-
-        if Path(APM_DIR).exists():
-            observer.schedule(event_handler, APM_DIR, recursive=True)
-            watch_paths.append(f"{APM_DIR}/")
-
-        if Path(".github/instructions").exists():
-            observer.schedule(event_handler, ".github/instructions", recursive=True)
-            watch_paths.append(".github/instructions/")
-
-        if Path(".github/agents").exists():
-            observer.schedule(event_handler, ".github/agents", recursive=True)
-            watch_paths.append(".github/agents/")
-
-        if Path(".github/chatmodes").exists():
-            observer.schedule(event_handler, ".github/chatmodes", recursive=True)
-            watch_paths.append(".github/chatmodes/")
-
-        if Path(APM_YML_FILENAME).exists():
-            observer.schedule(event_handler, ".", recursive=False)
-            watch_paths.append(APM_YML_FILENAME)
-
+        ).build()
+        watch_paths = _schedule_watch_paths(observer, event_handler)
         if not watch_paths:
             logger.warning("No APM directories found to watch")
             logger.progress("Run 'apm init' to create an APM project")
@@ -192,58 +261,19 @@ def _watch_mode(
         observer.start()
         logger.progress(f" Watching for changes in: {', '.join(watch_paths)}", symbol="eyes")
         logger.progress("Press Ctrl+C to stop watching...", symbol="info")
-
-        # Surface the same family-aware label the one-shot path prints so
-        # users see at-a-glance which AGENTS / CLAUDE / GEMINI files watch
-        # mode will (re)write (#1345).
-        label = _format_target_label(effective_target, target_label_user, target_label_config)
-        if label:
-            logger.progress(label, symbol="gear")
-
-        logger.progress("Performing initial compilation...", symbol="gear")
-
-        config = CompilationConfig.from_apm_yml(
-            output_path=output if output != AGENTS_MD_FILENAME else None,
-            chatmode=chatmode,
-            resolve_links=not no_links if no_links else None,
-            dry_run=dry_run,
-            target=effective_target,
-        )
-
-        compiler = AgentsCompiler(".")
-        result = compiler.compile(config)
-
-        if result.success:
-            if dry_run:
-                logger.success("Initial compilation successful (dry run)", symbol="sparkles")
-            else:
-                logger.success(
-                    f"Initial compilation complete: {result.output_path}",
-                    symbol="sparkles",
-                )
-        else:
-            logger.error("Initial compilation failed")
-            for error in result.errors:
-                logger.error(f"  [x] {error}")
-
+        _run_initial_compile(output, chatmode, no_links, dry_run, logger)
         try:
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:
             observer.stop()
             logger.progress("Stopped watching for changes", symbol="info")
-
         observer.join()
-
     except ImportError:
         logger.error("Watch mode requires the 'watchdog' library")
         logger.progress("Install it with: uv pip install watchdog")
         logger.progress("Or reinstall APM: uv pip install -e . (from the apm directory)")
-        import sys
-
         sys.exit(1)
-    except Exception as e:
-        logger.error(f"Error in watch mode: {e}")
-        import sys
-
+    except Exception as exc:
+        logger.error(f"Error in watch mode: {exc}")
         sys.exit(1)

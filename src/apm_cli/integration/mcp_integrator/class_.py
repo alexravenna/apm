@@ -286,35 +286,32 @@ class MCPIntegrator:
         )
 
     @staticmethod
-    @staticmethod
     def install(
         mcp_deps: list,
-        runtime: str | None = None,
-        exclude: str | None = None,
-        verbose: bool = False,
-        apm_config: dict | None = None,
-        stored_mcp_configs: dict | None = None,
-        project_root=None,
-        user_scope: bool = False,
-        explicit_target: str | None = None,
-        logger=None,
-        diagnostics=None,
-        scope=None,
+        opts=None,
+        **kwargs,
     ) -> int:
-        return _install_delegate.install(
-            mcp_deps,
-            runtime,
-            exclude,
-            verbose,
-            apm_config,
-            stored_mcp_configs,
-            project_root,
-            user_scope,
-            explicit_target,
-            logger,
-            diagnostics,
-            scope,
+        from apm_cli.integration.mcp_integrator_install.opts import MCPInstallOpts
+
+        if isinstance(opts, MCPInstallOpts):
+            return _install_delegate.install(mcp_deps, opts)
+
+        runtime = kwargs.get("runtime")
+        resolved_runtime = runtime if runtime is not None else opts
+        install_opts = MCPInstallOpts(
+            runtime=resolved_runtime,
+            exclude=kwargs.get("exclude"),
+            verbose=kwargs.get("verbose", False),
+            apm_config=kwargs.get("apm_config"),
+            stored_mcp_configs=kwargs.get("stored_mcp_configs"),
+            project_root=kwargs.get("project_root"),
+            user_scope=kwargs.get("user_scope", False),
+            explicit_target=kwargs.get("explicit_target"),
+            logger=kwargs.get("logger"),
+            diagnostics=kwargs.get("diagnostics"),
+            scope=kwargs.get("scope"),
         )
+        return _install_delegate.install(mcp_deps, install_opts)
 
 
 from . import cleanup as _cleanup

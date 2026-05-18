@@ -36,6 +36,89 @@ from .class_ import BearerFallbackOutcome
 T = TypeVar("T")
 
 
+def _try_credential_fallback_impl(
+    exc: Exception,
+    self_: object,
+    auth_ctx: object,
+    host_info: object,
+    operation: object,
+    path: str | None,
+    _log: object,
+) -> T:
+    """Inner logic for the ``_try_credential_fallback`` closure.
+
+    Extracted from :func:`try_with_fallback` to reduce its McCabe complexity
+    within the configured Ruff thresholds.
+    """
+    if auth_ctx.source in ("gh-auth-token", "git-credential-fill", "none"):
+        raise exc
+    # ADO uses ADO_APM_PAT + AAD bearer fallback; credential fill is out of scope.
+    if host_info.kind == "ado":
+        raise exc
+    _log(
+        f"Token from {auth_ctx.source} failed for {host_info.display_name}; "
+        "trying secondary credential sources"
+    )
+    _log(f"trying gh auth token for {host_info.display_name}")
+    gh_token = self_._token_manager.resolve_credential_from_gh_cli(host_info.host)
+    if gh_token:
+        _log(f"gh auth token resolved a credential for {host_info.display_name}")
+        return operation(
+            gh_token,
+            self_._build_git_env(gh_token, scheme="basic", host_kind=host_info.kind),
+        )
+    path_suffix = f" (path={path})" if path else ""
+    _log(f"trying git credential fill for {host_info.display_name}{path_suffix}")
+    cred = self_._token_manager.resolve_credential_from_git(
+        host_info.host, port=host_info.port, path=path
+    )
+    if cred:
+        _log(f"git credential fill resolved a credential for {host_info.display_name}")
+        return operation(
+            cred,
+            self_._build_git_env(cred, scheme="basic", host_kind=host_info.kind),
+        )
+    raise exc
+
+
+def _try_ado_bearer_fallback_impl(
+    exc: Exception,
+    self_: object,
+    operation: object,
+    ado_bearer_fallback_available: bool,
+    auth_ctx: object,
+) -> T:
+    """Inner logic for the ``_try_ado_bearer_fallback`` closure.
+
+    Extracted from :func:`try_with_fallback` to reduce its McCabe complexity
+    within the configured Ruff thresholds.
+    """
+    if not ado_bearer_fallback_available:
+        raise exc
+    from apm_cli.utils.github_host import is_ado_auth_failure_signal
+
+    if not is_ado_auth_failure_signal(str(exc)):
+        raise exc
+    from apm_cli.core.azure_cli import AzureCliBearerError, get_bearer_provider
+
+    provider = get_bearer_provider()
+    if not provider.is_available():
+        raise exc
+    try:
+        bearer = provider.get_bearer_token()
+        bearer_env = self_._build_git_env(bearer, scheme="bearer", host_kind="ado")
+        result = operation(bearer, bearer_env)
+        # Success on fallback -- emit deferred diagnostic warning
+        self_.emit_stale_pat_diagnostic(auth_ctx.host_info.display_name)
+        return result
+    except AzureCliBearerError:
+        pass  # Bearer acquisition itself failed; fall through to original error
+    except Exception:
+        # Bearer also failed (Case 4). Re-raise the ORIGINAL PAT exception.
+        pass
+    raise exc
+
+
 def try_with_fallback(
     self,
     host: str,
@@ -91,35 +174,7 @@ def try_with_fallback(
         ``git-credential-fill``, ``none``) skip retry to avoid
         double-invocation.
         """
-        if auth_ctx.source in ("gh-auth-token", "git-credential-fill", "none"):
-            raise exc
-        # ADO uses ADO_APM_PAT + AAD bearer fallback; credential fill is out of scope.
-        if host_info.kind == "ado":
-            raise exc
-        _log(
-            f"Token from {auth_ctx.source} failed for {host_info.display_name}; "
-            "trying secondary credential sources"
-        )
-        _log(f"trying gh auth token for {host_info.display_name}")
-        gh_token = self._token_manager.resolve_credential_from_gh_cli(host_info.host)
-        if gh_token:
-            _log(f"gh auth token resolved a credential for {host_info.display_name}")
-            return operation(
-                gh_token,
-                self._build_git_env(gh_token, scheme="basic", host_kind=host_info.kind),
-            )
-        path_suffix = f" (path={path})" if path else ""
-        _log(f"trying git credential fill for {host_info.display_name}{path_suffix}")
-        cred = self._token_manager.resolve_credential_from_git(
-            host_info.host, port=host_info.port, path=path
-        )
-        if cred:
-            _log(f"git credential fill resolved a credential for {host_info.display_name}")
-            return operation(
-                cred,
-                self._build_git_env(cred, scheme="basic", host_kind=host_info.kind),
-            )
-        raise exc
+        return _try_credential_fallback_impl(exc, self, auth_ctx, host_info, operation, path, _log)
 
     # ADO bearer fallback machinery (PAT was tried first; bearer is the safety net)
     ado_bearer_fallback_available = (
@@ -128,30 +183,9 @@ def try_with_fallback(
 
     def _try_ado_bearer_fallback(exc: Exception) -> T:
         """Retry ADO operation with AAD bearer when PAT fails with 401."""
-        if not ado_bearer_fallback_available:
-            raise exc
-        from apm_cli.utils.github_host import is_ado_auth_failure_signal
-
-        if not is_ado_auth_failure_signal(str(exc)):
-            raise exc
-        from apm_cli.core.azure_cli import AzureCliBearerError, get_bearer_provider
-
-        provider = get_bearer_provider()
-        if not provider.is_available():
-            raise exc
-        try:
-            bearer = provider.get_bearer_token()
-            bearer_env = self._build_git_env(bearer, scheme="bearer", host_kind="ado")
-            result = operation(bearer, bearer_env)
-            # Success on fallback -- emit deferred diagnostic warning
-            self.emit_stale_pat_diagnostic(auth_ctx.host_info.display_name)
-            return result
-        except AzureCliBearerError:
-            pass  # Bearer acquisition itself failed; fall through to original error
-        except Exception:
-            # Bearer also failed (Case 4). Re-raise the ORIGINAL PAT exception.
-            pass
-        raise exc
+        return _try_ado_bearer_fallback_impl(
+            exc, self, operation, ado_bearer_fallback_available, auth_ctx
+        )
 
     # Hosts that never have public repos -> auth-only
     if host_info.kind == "ghe_cloud":

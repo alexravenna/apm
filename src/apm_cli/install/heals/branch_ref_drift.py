@@ -26,9 +26,7 @@ class BranchRefDriftHeal:
 
         if not hctx.lockfile_match or hctx.update_refs:
             return False
-        if hctx.resolved_ref is None:
-            return False
-        if hctx.resolved_ref.ref_type != GitReferenceType.BRANCH:
+        if hctx.resolved_ref is None or hctx.resolved_ref.ref_type != GitReferenceType.BRANCH:
             return False
         # Guard against non-git resolution paths (e.g. Artifactory proxy
         # may return a ResolvedReference whose resolved_commit is None or
@@ -38,12 +36,12 @@ class BranchRefDriftHeal:
         remote_sha = hctx.resolved_ref.resolved_commit
         if remote_sha in (None, "", "cached"):
             return False
-        if hctx.existing_lockfile is None:
-            return False
-        locked = hctx.existing_lockfile.get_dependency(hctx.package_key)
-        if locked is None:
-            return False
-        if locked.resolved_commit in (None, "", "cached"):
+        locked = (
+            None
+            if hctx.existing_lockfile is None
+            else hctx.existing_lockfile.get_dependency(hctx.package_key)
+        )
+        if locked is None or locked.resolved_commit in (None, "", "cached"):
             return False
         return remote_sha != locked.resolved_commit
 

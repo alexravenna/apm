@@ -88,6 +88,38 @@ class MCPServerOperations:
 
         return servers_needing_installation
 
+    @staticmethod
+    def _extract_ids_from_runtime_config(runtime: str, config: dict) -> set[str]:
+        """Extract installed server IDs from a runtime's config dict.
+
+        Each runtime uses a different config shape; this method normalises them.
+        """
+        ids: set[str] = set()
+        if runtime in ("copilot", "claude"):
+            # copilot: mcp-config.json -> mcpServers
+            # claude: .mcp.json / ~/.claude.json (normalised by adapter) -> mcpServers
+            for server_config in config.get("mcpServers", {}).values():
+                if isinstance(server_config, dict) and (sid := server_config.get("id")):
+                    ids.add(sid)
+        elif runtime == "codex":
+            # Codex: config.toml -> mcp_servers.{name} sections
+            for server_config in config.get("mcp_servers", {}).values():
+                if isinstance(server_config, dict) and (sid := server_config.get("id")):
+                    ids.add(sid)
+        elif runtime == "vscode":
+            # VS Code: .vscode/mcp.json -> servers (legacy fallback: mcpServers)
+            for key in ("servers", "mcpServers"):
+                for server_config in config.get(key, {}).values():
+                    if isinstance(server_config, dict):
+                        sid = (
+                            server_config.get("id")
+                            or server_config.get("serverId")
+                            or server_config.get("server_id")
+                        )
+                        if sid:
+                            ids.add(sid)
+        return ids
+
     def _get_installed_server_ids(
         self,
         target_runtimes: list[str],
@@ -106,7 +138,7 @@ class MCPServerOperations:
         Returns:
             Set of server IDs that are currently installed
         """
-        installed_ids = set()
+        installed_ids: set[str] = set()
 
         # Import here to avoid circular imports
         try:
@@ -122,53 +154,8 @@ class MCPServerOperations:
                     user_scope=user_scope,
                 )
                 config = client.get_current_config()
-
                 if isinstance(config, dict):
-                    if runtime == "copilot":
-                        # Copilot stores servers in mcpServers object in mcp-config.json
-                        mcp_servers = config.get("mcpServers", {})
-                        for _server_name, server_config in mcp_servers.items():
-                            if isinstance(server_config, dict):
-                                server_id = server_config.get("id")
-                                if server_id:
-                                    installed_ids.add(server_id)
-
-                    elif runtime == "codex":
-                        # Codex stores servers as mcp_servers.{name} sections in config.toml
-                        mcp_servers = config.get("mcp_servers", {})
-                        for _server_name, server_config in mcp_servers.items():
-                            if isinstance(server_config, dict):
-                                server_id = server_config.get("id")
-                                if server_id:
-                                    installed_ids.add(server_id)
-
-                    elif runtime == "vscode":
-                        # VS Code stores project-local MCP config in .vscode/mcp.json
-                        # under the top-level "servers" key. Keep legacy fallbacks for
-                        # older settings.json-style structures when present.
-                        for key in ("servers", "mcpServers"):
-                            mcp_servers = config.get(key, {})
-                            for _server_name, server_config in mcp_servers.items():
-                                if isinstance(server_config, dict):
-                                    server_id = (
-                                        server_config.get("id")
-                                        or server_config.get("serverId")
-                                        or server_config.get("server_id")
-                                    )
-                                    if server_id:
-                                        installed_ids.add(server_id)
-
-                    elif runtime == "claude":
-                        # Claude Code stores servers under top-level mcpServers in either
-                        # project .mcp.json or user ~/.claude.json -- the adapter normalizes
-                        # both shapes to {"mcpServers": {...}} via get_current_config.
-                        mcp_servers = config.get("mcpServers", {})
-                        for _server_name, server_config in mcp_servers.items():
-                            if isinstance(server_config, dict):
-                                server_id = server_config.get("id")
-                                if server_id:
-                                    installed_ids.add(server_id)
-
+                    installed_ids.update(self._extract_ids_from_runtime_config(runtime, config))
             except Exception:  # noqa: S112
                 # If we can't read a runtime's config, skip it
                 continue

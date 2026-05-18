@@ -1,7 +1,5 @@
 """Base integrator with shared collision detection and sync logic."""
 
-import errno
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,10 +8,7 @@ from apm_cli.compilation.link_resolver import UnifiedLinkResolver
 from apm_cli.primitives.discovery import discover_primitives
 from apm_cli.utils.console import _rich_warning
 
-
-class _SymlinkRaceError(OSError):
-    """Raised by ``_read_bytes_no_follow`` when the path becomes a symlink
-    between the pre-check and the open(). Caught locally; never bubbles."""
+from . import _file_ops, _partition, _sync
 
 
 @dataclass
@@ -44,42 +39,6 @@ class IntegrationResult:
     # ``files_integrated`` so the install summary can surface the work
     # done in adopt-only runs instead of looking like a no-op.
     files_adopted: int = 0
-
-
-def _read_bytes_no_follow(path: Path) -> bytes:
-    """Read *path* with ``O_NOFOLLOW`` semantics where supported.
-
-    On POSIX, opens the file with ``os.O_NOFOLLOW`` so the kernel
-    rejects the open atomically if the final path component is a
-    symlink. This closes the TOCTOU race between
-    ``Path.is_symlink()`` and ``Path.read_bytes()`` exploited by a
-    co-tenant who can swap files for symlinks.
-
-    On Windows (no ``O_NOFOLLOW``), falls back to a plain read; the
-    caller's upfront ``is_symlink()`` check plus ``ensure_path_within``
-    at the integrator call sites provide the containment guarantee.
-    """
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
-    nofollow = getattr(os, "O_NOFOLLOW", 0)
-    flags |= nofollow
-    try:
-        fd = os.open(str(path), flags)
-    except OSError as exc:
-        # ELOOP is the canonical errno for "O_NOFOLLOW refused to open
-        # a symlink"; some Linux kernels return EMLINK or ELOOP-equivalent.
-        if nofollow and exc.errno in (errno.ELOOP, getattr(errno, "EMLINK", -1)):
-            raise _SymlinkRaceError(exc.errno, f"Refused to follow symlink at {path}") from exc
-        raise
-    try:
-        chunks: list[bytes] = []
-        while True:
-            chunk = os.read(fd, 65536)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        return b"".join(chunks)
-    finally:
-        os.close(fd)
 
 
 class BaseIntegrator:
@@ -161,78 +120,11 @@ class BaseIntegrator:
     def is_content_identical_to_source(target_path: Path, source_path: Path) -> bool:
         """Return True if *target_path* is byte-identical to *source_path*.
 
-        Used by non-skill integrators to silently *adopt* a pre-existing
-        on-disk file that already matches what APM would deploy.
-
-        Why this exists
-        ---------------
-        Without this short-circuit, the per-file loops in
-        ``agent_integrator``, ``instruction_integrator``, ``prompt_integrator``
-        and ``command_integrator`` would route the file straight into
-        :meth:`check_collision`. When the path is missing from
-        ``managed_files`` (e.g. lockfile was wiped, hand-edited, regenerated
-        by an older APM build, or the user's previous install crashed before
-        ``deployed_files`` was persisted) the file is treated as
-        "user-authored", *skipped*, and never appended to ``target_paths``.
-
-        That in turn leaves ``deployed_files`` empty in the new lockfile,
-        which trips the ``required-packages-deployed`` policy check at the
-        next install. Because ``policy_gate`` runs *before* ``integrate``
-        in ``pipeline.py``, the install can never self-heal -- a permanent
-        catch-22 lockout.
-
-        ``skill_integrator`` already has an equivalent content-identity
-        adopt at ``_promote_sub_skills`` (target.exists() +
-        ``_dirs_equal``). This helper restores symmetry for non-skill
-        primitives.
-
-        Conservative by design
-        ----------------------
-        Only fires for *byte-identical* matches. Format-transforming
-        targets (``codex_agent``, ``cursor_rules``, ``claude_rules``,
-        ``windsurf_rules``, ``gemini_command``, ...) won't match -- they
-        keep the existing skip behavior. This means we never silently
-        adopt content that *might* have come from somewhere else; we only
-        adopt files that are demonstrably the package's own bytes already
-        on disk.
-
-        TOCTOU hardening
-        ----------------
-        The classic ``is_symlink()`` -> ``read_bytes()`` sequence has a
-        race window: a hostile co-tenant on the same machine could swap
-        a regular file for a symlink between the two calls and cause
-        ``read_bytes()`` to follow it to an attacker-controlled path,
-        whose bytes might match source by construction. We close the
-        race by reading through ``os.open(..., O_NOFOLLOW)`` so the
-        kernel rejects the open atomically if the final component is a
-        symlink. ``O_NOFOLLOW`` is a no-op constant on platforms that
-        lack it (Windows), where the upfront ``is_symlink()`` check
-        plus ``ensure_path_within`` at the call site provide adequate
-        coverage (Windows also lacks the cheap unprivileged-symlink
-        creation primitive that makes this race practical on POSIX).
+        Uses TOCTOU-hardened O_NOFOLLOW reads to prevent symlink-race
+        adoption of attacker-controlled content.  Full rationale in
+        :func:`._file_ops.is_content_identical_to_source`.
         """
-        try:
-            if not target_path.exists() or not source_path.exists():
-                return False
-            # Cheap pre-check: reject obvious symlinks so we never even
-            # attempt the open. Race-free verification follows below via
-            # O_NOFOLLOW.
-            if target_path.is_symlink() or source_path.is_symlink():
-                return False
-            try:
-                target_bytes = _read_bytes_no_follow(target_path)
-                source_bytes = _read_bytes_no_follow(source_path)
-            except _SymlinkRaceError:
-                # The path turned into a symlink between the pre-check
-                # and the open() -- treat as non-identical so the caller
-                # falls through to ``check_collision`` and the file is
-                # NOT adopted. Silent (no diagnostic) because adopt is
-                # an optimisation; the user-authored skip path is the
-                # safe fallback.
-                return False
-            return target_bytes == source_bytes
-        except OSError:
-            return False
+        return _file_ops.is_content_identical_to_source(target_path, source_path)
 
     def _check_adopt_or_skip(
         self,
@@ -347,30 +239,18 @@ class BaseIntegrator:
             return False
         return True
 
-    # Backward-compat aliases mapping raw ``{prim}_{target}`` keys to
-    # the bucket names that existing callers expect.  Shared between
-    # ``partition_managed_files`` and ``partition_bucket_key`` so the
-    # mapping is defined exactly once.
-    _BUCKET_ALIASES: dict = {  # noqa: RUF012
-        "prompts_copilot": "prompts",
-        "agents_copilot": "agents_github",
-        "commands_claude": "commands",
-        "commands_cursor": "commands_cursor",
-        "commands_opencode": "commands_opencode",
-        "instructions_copilot": "instructions",
-        "instructions_cursor": "rules_cursor",
-        "instructions_claude": "rules_claude",
-    }
+    # Backward-compat aliases; canonical definition lives in ``_partition``.
+    _BUCKET_ALIASES: dict = _partition._BUCKET_ALIASES  # noqa: RUF012
 
     @staticmethod
     def partition_bucket_key(prim_name: str, target_name: str) -> str:
         """Return the canonical bucket key for a (primitive, target) pair.
 
         Applies backward-compat aliases so callers stay in sync with
-        ``partition_managed_files`` bucket naming.
+        ``partition_managed_files`` bucket naming.  Implementation in
+        :func:`._partition.partition_bucket_key`.
         """
-        raw = f"{prim_name}_{target_name}"
-        return BaseIntegrator._BUCKET_ALIASES.get(raw, raw)
+        return _partition.partition_bucket_key(prim_name, target_name)
 
     @staticmethod
     def partition_managed_files(
@@ -381,104 +261,10 @@ class BaseIntegrator:
 
         When *targets* is provided, prefixes and bucket keys are derived
         from those (scope-resolved) profiles.  Otherwise falls back to
-        ``KNOWN_TARGETS`` for backward compatibility.
-
-        Bucket keys are generated dynamically so adding a new target or
-        primitive automatically creates the corresponding bucket.
-
-        Cross-target buckets (``skills``, ``hooks``) group all targets
-        together because ``SkillIntegrator`` and ``HookIntegrator``
-        handle multi-target sync internally.
-
-        Path routing uses a longest-prefix-match strategy so multi-level
-        roots like ``.config/opencode/`` are handled correctly.
+        ``KNOWN_TARGETS`` for backward compatibility.  Full implementation
+        in :func:`._partition.partition_managed_files`.
         """
-        from apm_cli.integration.targets import KNOWN_TARGETS
-
-        source = targets if targets is not None else KNOWN_TARGETS.values()
-
-        buckets: dict = {}
-
-        # Skills and hooks are cross-target (single bucket each)
-        skill_prefixes: list = []
-        hook_prefixes: list = []
-
-        # prefix -> bucket_key (longest-prefix-match routing)
-        prefix_map: dict = {}
-
-        for target in source:
-            for prim_name, mapping in target.primitives.items():
-                # Dynamic-root targets (cowork) use cowork:// URI prefix.
-                if target.resolved_deploy_root is not None:
-                    if prim_name == "skills":
-                        from apm_cli.integration.copilot_cowork_paths import COWORK_LOCKFILE_PREFIX
-
-                        skill_prefixes.append(COWORK_LOCKFILE_PREFIX)
-                    continue
-                effective_root = mapping.deploy_root or target.root_dir
-                prefix = (
-                    f"{effective_root}/{mapping.subdir}/"
-                    if mapping.subdir
-                    else f"{effective_root}/"
-                )
-                if prim_name == "skills":
-                    skill_prefixes.append(prefix)
-                elif prim_name == "hooks":
-                    hook_prefixes.append(prefix)
-                else:
-                    raw_key = f"{prim_name}_{target.name}"
-                    bucket_key = BaseIntegrator._BUCKET_ALIASES.get(raw_key, raw_key)
-                    if bucket_key not in buckets:
-                        buckets[bucket_key] = set()
-                    prefix_map[prefix] = bucket_key
-
-        buckets["skills"] = set()
-        buckets["hooks"] = set()
-
-        skill_tuple = tuple(skill_prefixes)
-        hook_tuple = tuple(hook_prefixes)
-
-        # Build a prefix trie keyed by path segments for O(depth) routing.
-        # Each node is a dict; the special key "_bucket" stores the bucket
-        # for a complete prefix ending at that node.  This preserves the
-        # "single pass, O(1) per path" property from the original
-        # component_map approach while supporting multi-level roots like
-        # .config/opencode/.
-        trie: dict = {}
-        for prefix, bucket_key in prefix_map.items():
-            segments = [s for s in prefix.split("/") if s]
-            node = trie
-            for segment in segments:
-                child = node.get(segment)
-                if child is None:
-                    child = {}
-                    node[segment] = child
-                node = child
-            node["_bucket"] = bucket_key
-
-        for p in managed_files:
-            # Walk the trie; keep the deepest bucket match (longest prefix).
-            segments = [s for s in p.split("/") if s]
-            node = trie
-            last_bucket: str | None = None
-            for segment in segments:
-                child = node.get(segment)
-                if child is None:
-                    break
-                node = child
-                bk = node.get("_bucket")
-                if bk is not None:
-                    last_bucket = bk
-            if last_bucket is not None:
-                buckets[last_bucket].add(p)
-                continue
-            # Fall back to cross-target buckets
-            if p.startswith(skill_tuple):
-                buckets["skills"].add(p)
-            elif p.startswith(hook_tuple):
-                buckets["hooks"].add(p)
-
-        return buckets
+        return _partition.partition_managed_files(managed_files, targets=targets)
 
     @staticmethod
     def cleanup_empty_parents(
@@ -487,31 +273,9 @@ class BaseIntegrator:
     ) -> None:
         """Remove empty parent directories in a single bottom-up pass.
 
-        Collects all parent directories of *deleted_paths*, sorts by
-        depth descending, and removes each if empty  -- O(H+D) syscalls
-        instead of the per-file O(HxD) approach.
-
-        Args:
-            deleted_paths: Paths that were deleted (files or dirs).
-            stop_at: Do not remove this directory or any ancestor.
+        Full implementation in :func:`._sync.cleanup_empty_parents`.
         """
-        if not deleted_paths:
-            return
-        stop_resolved = stop_at.resolve()
-        # Collect unique parents (skip stop_at itself)
-        candidates: set = set()
-        for p in deleted_paths:
-            parent = p.parent
-            while parent != stop_at and parent.resolve() != stop_resolved:
-                candidates.add(parent)
-                parent = parent.parent
-        # Sort deepest-first for safe bottom-up removal
-        for d in sorted(candidates, key=lambda p: len(p.parts), reverse=True):
-            try:
-                if d.exists() and not any(d.iterdir()):
-                    d.rmdir()
-            except OSError:
-                pass
+        return _sync.cleanup_empty_parents(deleted_paths, stop_at)
 
     # ------------------------------------------------------------------
     # Link resolution helpers
@@ -580,91 +344,18 @@ class BaseIntegrator:
         """Remove APM-managed files matching *prefix* from *managed_files*.
 
         Falls back to a legacy glob when *managed_files* is ``None``.
-
-        Args:
-            project_root: Workspace root.
-            managed_files: Set of workspace-relative paths.
-            prefix: Only process paths that start with this prefix
-                    (e.g. ``".github/prompts/"``).
-            legacy_glob_dir: Directory to glob inside for the legacy fallback.
-            legacy_glob_pattern: Glob pattern for legacy fallback
-                                 (e.g. ``"*-apm.prompt.md"``).
-            targets: Optional target profiles for path validation.
-                     Passed through to ``validate_deploy_path()`` so
-                     user-scope prefixes are recognised.
-            logger: Optional logger for diagnostic messages.
-
-        Returns:
-            ``{"files_removed": int, "errors": int}``
+        Full implementation in :func:`._sync.sync_remove_files`.
         """
-        stats: dict[str, int] = {"files_removed": 0, "errors": 0}
-
-        if managed_files is not None:
-            # Lazy-resolve cowork root at most once per invocation.
-            _cowork_root_resolved: bool = False
-            _cowork_root_cached: Path | None = None
-            _cowork_orphans_skipped: int = 0
-
-            for rel_path in managed_files:
-                # managed_files is pre-normalized  -- no .replace() needed
-                if not rel_path.startswith(prefix):
-                    continue
-                if not BaseIntegrator.validate_deploy_path(rel_path, project_root, targets=targets):
-                    continue
-                # Resolve cowork:// paths to absolute before filesystem ops.
-                from apm_cli.integration.copilot_cowork_paths import COWORK_URI_SCHEME
-
-                if rel_path.startswith(COWORK_URI_SCHEME):
-                    try:
-                        if not _cowork_root_resolved:
-                            from apm_cli.integration.copilot_cowork_paths import (
-                                resolve_copilot_cowork_skills_dir,
-                            )
-
-                            _cowork_root_cached = resolve_copilot_cowork_skills_dir()
-                            _cowork_root_resolved = True
-                        if _cowork_root_cached is None:
-                            _cowork_orphans_skipped += 1
-                            continue
-                        from apm_cli.integration.copilot_cowork_paths import (
-                            from_lockfile_path,
-                        )
-
-                        target = from_lockfile_path(rel_path, _cowork_root_cached)
-                    except Exception:  # noqa: S112
-                        continue
-                else:
-                    target = project_root / rel_path
-                if target.exists():
-                    try:
-                        target.unlink()
-                        stats["files_removed"] += 1
-                    except Exception:
-                        stats["errors"] += 1
-
-            # Emit a one-time warning when cowork orphans were skipped.
-            if _cowork_orphans_skipped > 0:
-                _orphan_msg = (
-                    f"Cowork: skipping {_cowork_orphans_skipped} orphaned lockfile "
-                    f"{'entry' if _cowork_orphans_skipped == 1 else 'entries'}"
-                    " -- OneDrive path not detected.\n"
-                    "Run: apm config set copilot-cowork-skills-dir <path>  "
-                    "(or set APM_COPILOT_COWORK_SKILLS_DIR)\n"
-                    "to clean up these entries on the next install/uninstall."
-                )
-                if logger:
-                    logger.warning(_orphan_msg, symbol="warning")
-                else:
-                    _rich_warning(_orphan_msg, symbol="warning")
-        elif legacy_glob_dir and legacy_glob_pattern and legacy_glob_dir.exists():
-            for f in legacy_glob_dir.glob(legacy_glob_pattern):
-                try:
-                    f.unlink()
-                    stats["files_removed"] += 1
-                except Exception:
-                    stats["errors"] += 1
-
-        return stats
+        return _sync.sync_remove_files(
+            project_root,
+            managed_files,
+            prefix,
+            legacy_glob_dir=legacy_glob_dir,
+            legacy_glob_pattern=legacy_glob_pattern,
+            targets=targets,
+            logger=logger,
+            _warn_fn=_rich_warning,
+        )
 
     # ------------------------------------------------------------------
     # File-discovery helpers (reusable globs)
@@ -678,60 +369,8 @@ class BaseIntegrator:
     ) -> list[Path]:
         """Search *package_path* (and optional subdirectories) for *pattern*.
 
-        Symlinks are rejected outright to prevent traversal attacks.
-
-        Args:
-            package_path: Root of the installed package.
-            pattern: Glob pattern (e.g. ``"*.prompt.md"``).
-            subdirs: Extra subdirectory paths relative to *package_path*
-                     to search (e.g. ``[".apm/prompts"]``).
-
-        Returns:
-            De-duplicated list of matching ``Path`` objects.
+        Symlinks and hardlinks escaping the package root are rejected to
+        prevent traversal attacks.  Full implementation in
+        :func:`._file_ops.find_files_by_glob`.
         """
-        results: list[Path] = []
-        seen: set = set()
-
-        dirs = [package_path]
-        if subdirs:
-            dirs.extend(package_path / s for s in subdirs)
-
-        for d in dirs:
-            if not d.exists():
-                continue
-            for f in sorted(d.glob(pattern)):
-                if f.is_symlink():
-                    continue
-                # Hardlink containment: a hardlink is a second directory
-                # entry pointing at an inode that may live anywhere on
-                # the filesystem.  Path.resolve() returns the hardlink's
-                # own path (inside the package root), so the
-                # is_relative_to check below cannot catch it.  Reject
-                # any file with link-count > 1 to prevent a malicious
-                # package shipping a hardlink to (e.g.) /etc/passwd
-                # from being read or copied via integration.  False
-                # positives are vanishingly rare for ``.prompt.md``-style
-                # source files which should always be plain regular files.
-                try:
-                    if f.stat().st_nlink > 1:
-                        continue
-                except OSError:
-                    continue
-                resolved = f.resolve()
-                # Defense-in-depth containment guard: skip files whose
-                # resolved path escapes the package root.  Belt-and-
-                # suspenders against any future regression in the
-                # is_symlink() check above.  See path_security.ensure_path_within
-                # for the canonical predicate; we inline the check here to stay
-                # loop-fast and avoid raising on every malicious entry.
-                try:
-                    pkg_resolved = package_path.resolve()
-                    if not resolved.is_relative_to(pkg_resolved):
-                        continue
-                except (ValueError, OSError):
-                    continue
-                if resolved not in seen:
-                    seen.add(resolved)
-                    results.append(f)
-
-        return results
+        return _file_ops.find_files_by_glob(package_path, pattern, subdirs)

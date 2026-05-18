@@ -38,6 +38,26 @@ from .class_ import HostInfo, _org_to_env_suffix
 T = TypeVar("T")
 
 
+def _resolve_ado_token(self, host_info: HostInfo) -> tuple[str | None, str, str]:
+    """Walk the ADO token resolution chain: PAT env -> AAD bearer -> none."""
+    pat = os.environ.get("ADO_APM_PAT")
+    if pat:
+        return pat, "ADO_APM_PAT", "basic"
+    # Try AAD bearer via az cli (lazy import to avoid module-load cost on non-ADO paths)
+    from apm_cli.core.azure_cli import AzureCliBearerError, get_bearer_provider
+
+    provider = get_bearer_provider()
+    if provider.is_available():
+        try:
+            bearer = provider.get_bearer_token()
+            return bearer, GitHubTokenManager.ADO_BEARER_SOURCE, "bearer"
+        except AzureCliBearerError:
+            # az is on PATH but token acquisition failed (e.g., not logged in).
+            # Fall through to token=None; build_error_context will render Case 3.
+            pass
+    return None, "none", "basic"
+
+
 def _resolve_token(self, host_info: HostInfo, org: str | None) -> tuple[str | None, str, str]:
     """Walk the token resolution chain.  Returns (token, source, scheme).
 
@@ -58,23 +78,7 @@ def _resolve_token(self, host_info: HostInfo, org: str | None) -> tuple[str | No
     All token-bearing requests use HTTPS.
     """
     if host_info.kind == "ado":
-        # ADO resolution chain: PAT env -> AAD bearer -> none
-        pat = os.environ.get("ADO_APM_PAT")
-        if pat:
-            return pat, "ADO_APM_PAT", "basic"
-        # Try AAD bearer via az cli (lazy import to avoid module-load cost on non-ADO paths)
-        from apm_cli.core.azure_cli import AzureCliBearerError, get_bearer_provider
-
-        provider = get_bearer_provider()
-        if provider.is_available():
-            try:
-                bearer = provider.get_bearer_token()
-                return bearer, GitHubTokenManager.ADO_BEARER_SOURCE, "bearer"
-            except AzureCliBearerError:
-                # az is on PATH but token acquisition failed (e.g., not logged in).
-                # Fall through to token=None; build_error_context will render Case 3.
-                pass
-        return None, "none", "basic"
+        return _resolve_ado_token(self, host_info)
 
     # ADO uses ADO_APM_PAT (single var) + AAD bearer fallback;
     # per-org vars and credential fill are out of scope.

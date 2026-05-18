@@ -8,120 +8,7 @@ from rich.text import Text
 from .formatters import RICH_AVAILABLE
 from .models import OptimizationDecision
 
-
-def _format_mathematical_analysis(self, decisions: list[OptimizationDecision]) -> list[str]:
-    """Format mathematical analysis for verbose mode with coverage-first principles."""
-    lines = []
-
-    if self.use_color:
-        lines.append(self._styled("Mathematical Optimization Analysis", "cyan bold"))
-    else:
-        lines.append("Mathematical Optimization Analysis")
-
-    lines.append("")
-
-    if self.use_color and RICH_AVAILABLE:
-        # Coverage-First Strategy Table
-        strategy_table = Table(
-            title="Three-Tier Coverage-First Strategy",
-            show_header=True,
-            header_style="bold cyan",
-            box=box.SIMPLE_HEAD,
-        )
-        strategy_table.add_column("Pattern", style="white", width=25)
-        strategy_table.add_column("Source", style="yellow", width=15)
-        strategy_table.add_column("Distribution", style="yellow", width=12)
-        strategy_table.add_column("Strategy", style="green", width=15)
-        strategy_table.add_column("Coverage Guarantee", style="blue", width=20)
-
-        for decision in decisions:
-            pattern = decision.pattern if decision.pattern else "(global)"
-
-            # Extract source information
-            source_display = "unknown"
-            if decision.instruction and hasattr(decision.instruction, "file_path"):
-                try:
-                    source_display = decision.instruction.file_path.name
-                except Exception:
-                    source_display = "unknown"
-
-            # Distribution score with threshold classification
-            score = decision.distribution_score
-            if score < 0.3:
-                dist_display = f"{score:.3f} (Low)"
-                strategy_name = "Single Point"
-                coverage_status = "[+] Perfect"
-            elif score > 0.7:
-                dist_display = f"{score:.3f} (High)"
-                strategy_name = "Distributed"
-                coverage_status = "[+] Universal"
-            else:
-                dist_display = f"{score:.3f} (Medium)"
-                strategy_name = "Selective Multi"
-                # Check if root placement was used (indicates coverage fallback)
-                if any(str(p) == "." or p.name == "" for p in decision.placement_directories):
-                    coverage_status = "[!] Root Fallback"
-                else:
-                    coverage_status = "[+] Verified"
-
-            strategy_table.add_row(
-                pattern, source_display, dist_display, strategy_name, coverage_status
-            )
-
-        # Render strategy table
-        if self.console:
-            with self.console.capture() as capture:
-                self.console.print(strategy_table)
-            table_output = capture.get()
-            if table_output.strip():
-                lines.extend(table_output.split("\n"))
-
-        lines.append("")
-
-        # Hierarchical Coverage Analysis Table
-        coverage_table = Table(
-            title="Hierarchical Coverage Analysis",
-            show_header=True,
-            header_style="bold cyan",
-            box=box.SIMPLE_HEAD,
-        )
-        coverage_table.add_column("Pattern", style="white", width=25)
-        coverage_table.add_column("Matching Files", style="yellow", width=15)
-        coverage_table.add_column("Placement", style="green", width=20)
-        coverage_table.add_column("Coverage Result", style="blue", width=25)
-
-        for decision in decisions:
-            pattern = decision.pattern if decision.pattern else "(global)"
-            matching_files = f"{decision.matching_directories} dirs"
-
-            if len(decision.placement_directories) == 1:
-                placement = self._get_relative_display_path(decision.placement_directories[0])
-
-                # Analyze coverage outcome
-                if str(decision.placement_directories[0]).endswith("."):
-                    coverage_result = "Root -> All files inherit"
-                elif decision.distribution_score < 0.3:
-                    coverage_result = "Local -> Perfect efficiency"
-                else:
-                    coverage_result = "Selective -> Coverage verified"
-            else:
-                placement = f"{len(decision.placement_directories)} locations"
-                coverage_result = "Multi-point -> Full coverage"
-
-            coverage_table.add_row(pattern, matching_files, placement, coverage_result)
-
-        # Render coverage table
-        if self.console:
-            with self.console.capture() as capture:
-                self.console.print(coverage_table)
-            table_output = capture.get()
-            if table_output.strip():
-                lines.extend(table_output.split("\n"))
-
-        lines.append("")
-
-        # Updated Mathematical Foundation Panel
-        foundation_text = """Objective: minimize sum(context_pollution x directory_weight)
+FOUNDATION_TEXT = """Objective: minimize sum(context_pollution x directory_weight)
 Constraints: for_allfile_matching_pattern -> can_inherit_instruction
 Variables: placement_matrix in {0,1}
 Algorithm: Three-tier strategy with hierarchical coverage verification
@@ -129,150 +16,7 @@ Algorithm: Three-tier strategy with hierarchical coverage verification
 Coverage Guarantee: Every file can access applicable instructions through
 hierarchical inheritance. Coverage takes priority over efficiency."""
 
-        if self.console:
-            from rich.panel import Panel
-
-            try:
-                panel = Panel(
-                    foundation_text,
-                    title="Coverage-Constrained Optimization",
-                    border_style="cyan",
-                )
-                with self.console.capture() as capture:
-                    self.console.print(panel)
-                panel_output = capture.get()
-                if panel_output.strip():
-                    lines.extend(panel_output.split("\n"))
-            except Exception:
-                # Fallback to simple text
-                lines.append("Coverage-Constrained Optimization:")
-                for line in foundation_text.split("\n"):
-                    lines.append(f"  {line}")
-
-    else:
-        # Fallback for non-Rich environments
-        lines.append("Coverage-First Strategy Analysis:")
-        for decision in decisions:
-            pattern = decision.pattern if decision.pattern else "(global)"
-            score = f"{decision.distribution_score:.3f}"
-            strategy = decision.strategy.value
-            coverage = "[+] Verified" if decision.distribution_score < 0.7 else "[!] Root Fallback"
-            lines.append(f"  {pattern:<30} {score:<8} {strategy:<15} {coverage}")
-
-        lines.append("")
-        lines.append("Mathematical Foundation:")
-        lines.append("  Objective: minimize sum(context_pollution x directory_weight)")
-        lines.append("  Constraints: for_allfile_matching_pattern -> can_inherit_instruction")
-        lines.append("  Algorithm: Three-tier strategy with coverage verification")
-        lines.append("  Principle: Coverage guarantee takes priority over efficiency")
-
-    return lines
-
-
-def _format_detailed_metrics(self, stats) -> list[str]:
-    """Format detailed performance metrics table with interpretations."""
-    lines = []
-
-    if self.use_color:
-        lines.append(self._styled("Performance Metrics", "cyan bold"))
-    else:
-        lines.append("Performance Metrics")
-
-    # Create metrics table
-    if self.use_color and RICH_AVAILABLE:
-        table = Table(box=box.SIMPLE)
-        table.add_column("Metric", style="white", width=20)
-        table.add_column("Value", style="white", width=12)
-        table.add_column("Assessment", style="blue", width=35)
-
-        # Context Efficiency with coverage-first interpretation
-        efficiency = stats.efficiency_percentage
-        if efficiency >= 80:
-            assessment = "Excellent - perfect pattern locality"
-            assessment_color = "bright_green"
-            value_color = "bright_green"
-        elif efficiency >= 60:
-            assessment = "Good - well-optimized with minimal coverage conflicts"
-            assessment_color = "green"
-            value_color = "green"
-        elif efficiency >= 40:
-            assessment = "Fair - moderate coverage-driven pollution"
-            assessment_color = "yellow"
-            value_color = "yellow"
-        elif efficiency >= 20:
-            assessment = "Poor - significant coverage constraints"
-            assessment_color = "orange1"
-            value_color = "orange1"
-        else:
-            assessment = "Very Poor - may be mathematically optimal given coverage"
-            assessment_color = "red"
-            value_color = "red"
-
-        table.add_row(
-            "Context Efficiency",
-            Text(f"{efficiency:.1f}%", style=value_color),
-            Text(assessment, style=assessment_color),
-        )
-
-        # Calculate pollution level with coverage-aware interpretation
-        pollution_level = 100 - efficiency
-        if pollution_level <= 20:
-            pollution_assessment = "Excellent - perfect pattern locality"
-            pollution_color = "bright_green"
-        elif pollution_level <= 40:
-            pollution_assessment = "Good - minimal coverage conflicts"
-            pollution_color = "green"
-        elif pollution_level <= 60:
-            pollution_assessment = "Fair - acceptable coverage-driven pollution"
-            pollution_color = "yellow"
-        elif pollution_level <= 80:
-            pollution_assessment = "Poor - high coverage constraints"
-            pollution_color = "orange1"
-        else:
-            pollution_assessment = "Very Poor - but may guarantee coverage"
-            pollution_color = "red"
-
-        table.add_row(
-            "Pollution Level",
-            Text(f"{pollution_level:.1f}%", style=pollution_color),
-            Text(pollution_assessment, style=pollution_color),
-        )
-
-        if stats.placement_accuracy:
-            accuracy = stats.placement_accuracy * 100
-            if accuracy >= 95:
-                accuracy_assessment = "Excellent - mathematically optimal"
-                accuracy_color = "bright_green"
-            elif accuracy >= 85:
-                accuracy_assessment = "Good - near optimal"
-                accuracy_color = "green"
-            elif accuracy >= 70:
-                accuracy_assessment = "Fair - reasonably placed"
-                accuracy_color = "yellow"
-            else:
-                accuracy_assessment = "Poor - suboptimal placement"
-                accuracy_color = "orange1"
-
-            table.add_row(
-                "Placement Accuracy",
-                Text(f"{accuracy:.1f}%", style=accuracy_color),
-                Text(accuracy_assessment, style=accuracy_color),
-            )
-
-        # Render table
-        if self.console:
-            with self.console.capture() as capture:
-                self.console.print(table)
-            table_output = capture.get()
-            if table_output.strip():
-                lines.extend(table_output.split("\n"))
-
-        lines.append("")
-
-        # Add interpretation guide
-        if self.console:
-            try:
-                interpretation_text = """How These Metrics Are Calculated
+METRICS_GUIDE_TEXT = """How These Metrics Are Calculated
 
 Context Efficiency = Average across all directories of (Relevant Instructions / Total Instructions)
 * For each directory, APM analyzes what instructions agents would inherit from AGENTS.md files
@@ -300,59 +44,276 @@ Pollution Level:
 
 Example: 36.7% efficiency means agents working in specific directories see only 36.7% relevant instructions and 63.3% irrelevant context pollution."""
 
-                panel = Panel(
-                    interpretation_text,
+
+def _append_heading(self, lines: list[str], title: str) -> None:
+    """Append a styled or plain heading."""
+    lines.append(self._styled(title, "cyan bold") if self.use_color else title)
+
+
+def _append_captured_renderable(self, lines: list[str], renderable) -> None:
+    """Capture a Rich renderable into output lines when possible."""
+    if not self.console:
+        return
+    with self.console.capture() as capture:
+        self.console.print(renderable)
+    output = capture.get()
+    if output.strip():
+        lines.extend(output.split("\n"))
+
+
+def _strategy_row(decision: OptimizationDecision) -> tuple[str, str, str, str, str]:
+    """Build one row for the strategy analysis table."""
+    pattern = decision.pattern if decision.pattern else "(global)"
+    source_display = "unknown"
+    if decision.instruction and hasattr(decision.instruction, "file_path"):
+        try:
+            source_display = decision.instruction.file_path.name
+        except Exception:
+            source_display = "unknown"
+
+    score = decision.distribution_score
+    if score < 0.3:
+        return pattern, source_display, f"{score:.3f} (Low)", "Single Point", "[+] Perfect"
+    if score > 0.7:
+        return pattern, source_display, f"{score:.3f} (High)", "Distributed", "[+] Universal"
+
+    coverage_status = "[!] Root Fallback"
+    if not any(str(path) == "." or path.name == "" for path in decision.placement_directories):
+        coverage_status = "[+] Verified"
+    return pattern, source_display, f"{score:.3f} (Medium)", "Selective Multi", coverage_status
+
+
+def _coverage_row(self, decision: OptimizationDecision) -> tuple[str, str, str, str]:
+    """Build one row for the coverage analysis table."""
+    pattern = decision.pattern if decision.pattern else "(global)"
+    matching_files = f"{decision.matching_directories} dirs"
+    if len(decision.placement_directories) != 1:
+        return (
+            pattern,
+            matching_files,
+            f"{len(decision.placement_directories)} locations",
+            "Multi-point -> Full coverage",
+        )
+
+    placement_path = decision.placement_directories[0]
+    placement = self._get_relative_display_path(placement_path)
+    if str(placement_path).endswith("."):
+        coverage_result = "Root -> All files inherit"
+    elif decision.distribution_score < 0.3:
+        coverage_result = "Local -> Perfect efficiency"
+    else:
+        coverage_result = "Selective -> Coverage verified"
+    return pattern, matching_files, placement, coverage_result
+
+
+def _build_assessment(
+    value: float, thresholds: list[tuple[float, str, str]], fallback: tuple[str, str]
+) -> tuple[str, str]:
+    """Return assessment label and colour for a numeric threshold table."""
+    for minimum, label, colour in thresholds:
+        if value >= minimum:
+            return label, colour
+    return fallback
+
+
+def _build_efficiency_assessment(efficiency: float) -> tuple[str, str]:
+    return _build_assessment(
+        efficiency,
+        [
+            (80, "Excellent - perfect pattern locality", "bright_green"),
+            (60, "Good - well-optimized with minimal coverage conflicts", "green"),
+            (40, "Fair - moderate coverage-driven pollution", "yellow"),
+            (20, "Poor - significant coverage constraints", "orange1"),
+        ],
+        ("Very Poor - may be mathematically optimal given coverage", "red"),
+    )
+
+
+def _build_pollution_assessment(pollution_level: float) -> tuple[str, str]:
+    return _build_assessment(
+        -pollution_level,
+        [
+            (-20, "Excellent - perfect pattern locality", "bright_green"),
+            (-40, "Good - minimal coverage conflicts", "green"),
+            (-60, "Fair - acceptable coverage-driven pollution", "yellow"),
+            (-80, "Poor - high coverage constraints", "orange1"),
+        ],
+        ("Very Poor - but may guarantee coverage", "red"),
+    )
+
+
+def _build_accuracy_assessment(accuracy: float) -> tuple[str, str]:
+    return _build_assessment(
+        accuracy,
+        [
+            (95, "Excellent - mathematically optimal", "bright_green"),
+            (85, "Good - near optimal", "green"),
+            (70, "Fair - reasonably placed", "yellow"),
+        ],
+        ("Poor - suboptimal placement", "orange1"),
+    )
+
+
+def _format_mathematical_analysis(self, decisions: list[OptimizationDecision]) -> list[str]:
+    """Format mathematical analysis for verbose mode with coverage-first principles."""
+    lines: list[str] = []
+    _append_heading(self, lines, "Mathematical Optimization Analysis")
+    lines.append("")
+
+    if self.use_color and RICH_AVAILABLE:
+        strategy_table = Table(
+            title="Three-Tier Coverage-First Strategy",
+            show_header=True,
+            header_style="bold cyan",
+            box=box.SIMPLE_HEAD,
+        )
+        strategy_table.add_column("Pattern", style="white", width=25)
+        strategy_table.add_column("Source", style="yellow", width=15)
+        strategy_table.add_column("Distribution", style="yellow", width=12)
+        strategy_table.add_column("Strategy", style="green", width=15)
+        strategy_table.add_column("Coverage Guarantee", style="blue", width=20)
+        for decision in decisions:
+            strategy_table.add_row(*_strategy_row(decision))
+        _append_captured_renderable(self, lines, strategy_table)
+        lines.append("")
+
+        coverage_table = Table(
+            title="Hierarchical Coverage Analysis",
+            show_header=True,
+            header_style="bold cyan",
+            box=box.SIMPLE_HEAD,
+        )
+        coverage_table.add_column("Pattern", style="white", width=25)
+        coverage_table.add_column("Matching Files", style="yellow", width=15)
+        coverage_table.add_column("Placement", style="green", width=20)
+        coverage_table.add_column("Coverage Result", style="blue", width=25)
+        for decision in decisions:
+            coverage_table.add_row(*_coverage_row(self, decision))
+        _append_captured_renderable(self, lines, coverage_table)
+        lines.append("")
+
+        try:
+            _append_captured_renderable(
+                self,
+                lines,
+                Panel(
+                    FOUNDATION_TEXT,
+                    title="Coverage-Constrained Optimization",
+                    border_style="cyan",
+                ),
+            )
+        except Exception:
+            lines.append("Coverage-Constrained Optimization:")
+            for line in FOUNDATION_TEXT.split("\n"):
+                lines.append(f"  {line}")
+        return lines
+
+    lines.append("Coverage-First Strategy Analysis:")
+    for decision in decisions:
+        pattern = decision.pattern if decision.pattern else "(global)"
+        score = f"{decision.distribution_score:.3f}"
+        strategy = decision.strategy.value
+        coverage = "[+] Verified" if decision.distribution_score < 0.7 else "[!] Root Fallback"
+        lines.append(f"  {pattern:<30} {score:<8} {strategy:<15} {coverage}")
+
+    lines.extend(
+        [
+            "",
+            "Mathematical Foundation:",
+            "  Objective: minimize sum(context_pollution x directory_weight)",
+            "  Constraints: for_allfile_matching_pattern -> can_inherit_instruction",
+            "  Algorithm: Three-tier strategy with coverage verification",
+            "  Principle: Coverage guarantee takes priority over efficiency",
+        ]
+    )
+    return lines
+
+
+def _format_detailed_metrics(self, stats) -> list[str]:
+    """Format detailed performance metrics table with interpretations."""
+    lines: list[str] = []
+    _append_heading(self, lines, "Performance Metrics")
+
+    efficiency = stats.efficiency_percentage
+    pollution_level = 100 - efficiency
+    if self.use_color and RICH_AVAILABLE:
+        table = Table(box=box.SIMPLE)
+        table.add_column("Metric", style="white", width=20)
+        table.add_column("Value", style="white", width=12)
+        table.add_column("Assessment", style="blue", width=35)
+
+        efficiency_assessment, efficiency_colour = _build_efficiency_assessment(efficiency)
+        pollution_assessment, pollution_colour = _build_pollution_assessment(pollution_level)
+        table.add_row(
+            "Context Efficiency",
+            Text(f"{efficiency:.1f}%", style=efficiency_colour),
+            Text(efficiency_assessment, style=efficiency_colour),
+        )
+        table.add_row(
+            "Pollution Level",
+            Text(f"{pollution_level:.1f}%", style=pollution_colour),
+            Text(pollution_assessment, style=pollution_colour),
+        )
+
+        if stats.placement_accuracy:
+            accuracy = stats.placement_accuracy * 100
+            accuracy_assessment, accuracy_colour = _build_accuracy_assessment(accuracy)
+            table.add_row(
+                "Placement Accuracy",
+                Text(f"{accuracy:.1f}%", style=accuracy_colour),
+                Text(accuracy_assessment, style=accuracy_colour),
+            )
+
+        _append_captured_renderable(self, lines, table)
+        lines.append("")
+        try:
+            _append_captured_renderable(
+                self,
+                lines,
+                Panel(
+                    METRICS_GUIDE_TEXT,
                     title="Metrics Guide",
                     border_style="dim",
                     title_align="left",
-                )
-                with self.console.capture() as capture:
-                    self.console.print(panel)
-                panel_output = capture.get()
-                if panel_output.strip():
-                    lines.extend(panel_output.split("\n"))
-            except Exception:
-                # Fallback to simple text
-                lines.extend(
-                    [
-                        "Metrics Guide:",
-                        "* Context Efficiency 80-100%: Excellent | 60-80%: Good | 40-60%: Fair | <40%: Poor",
-                        "* Pollution 0-10%: Excellent | 10-25%: Good | 25-50%: Fair | >50%: Poor",
-                    ]
-                )
+                ),
+            )
+        except Exception:
+            lines.extend(
+                [
+                    "Metrics Guide:",
+                    "* Context Efficiency 80-100%: Excellent | 60-80%: Good | 40-60%: Fair | <40%: Poor",
+                    "* Pollution 0-10%: Excellent | 10-25%: Good | 25-50%: Fair | >50%: Poor",
+                ]
+            )
+        return lines
+
+    if efficiency >= 80:
+        efficiency_assessment = "Excellent"
+    elif efficiency >= 60:
+        efficiency_assessment = "Good"
+    elif efficiency >= 40:
+        efficiency_assessment = "Fair"
+    elif efficiency >= 20:
+        efficiency_assessment = "Poor"
     else:
-        # Fallback for non-Rich environments
-        efficiency = stats.efficiency_percentage
-        pollution = 100 - efficiency
+        efficiency_assessment = "Very Poor"
 
-        if efficiency >= 80:
-            efficiency_assessment = "Excellent"
-        elif efficiency >= 60:
-            efficiency_assessment = "Good"
-        elif efficiency >= 40:
-            efficiency_assessment = "Fair"
-        elif efficiency >= 20:
-            efficiency_assessment = "Poor"
-        else:
-            efficiency_assessment = "Very Poor"
+    if pollution_level <= 10:
+        pollution_assessment = "Excellent"
+    elif pollution_level <= 25:
+        pollution_assessment = "Good"
+    elif pollution_level <= 50:
+        pollution_assessment = "Fair"
+    else:
+        pollution_assessment = "Poor"
 
-        if pollution <= 10:
-            pollution_assessment = "Excellent"
-        elif pollution <= 25:
-            pollution_assessment = "Good"
-        elif pollution <= 50:
-            pollution_assessment = "Fair"
-        else:
-            pollution_assessment = "Poor"
-
-        lines.extend(
-            [
-                f"Context Efficiency: {efficiency:.1f}% ({efficiency_assessment})",
-                f"Pollution Level: {pollution:.1f}% ({pollution_assessment})",
-                "Guide: 80-100% Excellent | 60-80% Good | 40-60% Fair | 20-40% Poor | <20% Very Poor",
-            ]
-        )
-
+    lines.extend(
+        [
+            f"Context Efficiency: {efficiency:.1f}% ({efficiency_assessment})",
+            f"Pollution Level: {pollution_level:.1f}% ({pollution_assessment})",
+            "Guide: 80-100% Excellent | 60-80% Good | 40-60% Fair | 20-40% Poor | <20% Very Poor",
+        ]
+    )
     return lines
 
 

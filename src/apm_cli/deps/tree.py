@@ -17,6 +17,110 @@ _logger = logging.getLogger(__name__)
 _DEFAULT_RESOLVE_PARALLEL = 4
 
 
+def _build_phase_a_work_items(
+    tree: "DependencyTree",
+    level_items: list,
+    queued_keys: set,
+    max_depth: int,
+) -> list:
+    """Dedup, node-creation, and depth-filter for one BFS level (Phase A).
+
+    Extracted from :func:`build_dependency_tree` to reduce its McCabe
+    complexity within the configured Ruff thresholds.
+    """
+    work_items: list[tuple[DependencyNode, DependencyReference, DependencyNode | None, bool]]
+    work_items = []
+    for dep_ref, depth, parent_node, is_dev in level_items:
+        # Remove from queued set since we're now processing this dependency
+        queued_keys.discard(dep_ref.get_unique_key())
+
+        # Check maximum depth to prevent infinite recursion
+        if depth > max_depth:
+            continue
+
+        # Check if we already processed this dependency at this level or higher
+        existing_node = tree.get_node(dep_ref.get_unique_key())
+        if existing_node and existing_node.depth <= depth:
+            # Prod wins over dev: if existing was dev and this is prod, promote it
+            if existing_node.is_dev and not is_dev:
+                existing_node.is_dev = False
+            # We've already processed this dependency at a shallower or equal depth
+            # Create parent-child relationship if parent exists
+            if parent_node and existing_node not in parent_node.children:
+                parent_node.children.append(existing_node)
+            continue
+
+        # Create a new node for this dependency
+        # Note: In a real implementation, we would load the actual package here
+        # For now, create a placeholder package
+        placeholder_package = APMPackage(
+            name=dep_ref.get_display_name(), version="unknown", source=dep_ref.repo_url
+        )
+
+        node = DependencyNode(
+            package=placeholder_package,
+            dependency_ref=dep_ref,
+            depth=depth,
+            parent=parent_node,
+            is_dev=is_dev,
+        )
+
+        # Add to tree
+        tree.add_node(node)
+
+        # Create parent-child relationship
+        if parent_node:
+            parent_node.children.append(node)
+
+        work_items.append((node, dep_ref, parent_node, is_dev))
+    return work_items
+
+
+def _integrate_phase_c_results(
+    results: list,
+    processing_queue: "deque",
+    queued_keys: set,
+    expand_parent_repo_decl: "object",
+) -> None:
+    """Integrate worker results and enqueue sub-dependencies (Phase C).
+
+    Extracted from :func:`build_dependency_tree` to reduce its McCabe
+    complexity within the configured Ruff thresholds.
+    """
+    for (node, dep_ref, _parent_node, is_dev), loaded_package, exc in results:
+        if exc is not None:
+            if isinstance(exc, ValueError):
+                _logger.warning(
+                    "Invalid transitive apm.yml for %s: %s",
+                    dep_ref.get_display_name(),
+                    exc,
+                )
+            else:
+                _logger.debug(
+                    "Could not load transitive apm.yml for %s: %s",
+                    dep_ref.get_display_name(),
+                    exc,
+                )
+            continue
+        if loaded_package:
+            # Update the node with the actual loaded package
+            node.package = loaded_package
+
+            # Get sub-dependencies and add them to the processing queue
+            # Transitive deps inherit is_dev from parent. Iteration
+            # order matches the manifest's declaration order, which
+            # ``loaded_package.get_apm_dependencies()`` preserves.
+            sub_dependencies = loaded_package.get_apm_dependencies()
+            for sub_dep in sub_dependencies:
+                if sub_dep.is_parent_repo_inheritance:
+                    sub_dep = expand_parent_repo_decl(node.dependency_ref, sub_dep)
+                # Avoid infinite recursion by checking if we're already processing this dep
+                # Use O(1) set lookup instead of O(n) list comprehension
+                if sub_dep.get_unique_key() not in queued_keys:
+                    processing_queue.append((sub_dep, node.depth + 1, node, is_dev))
+                    queued_keys.add(sub_dep.get_unique_key())
+
+
 def build_dependency_tree(self, root_apm_yml: Path) -> DependencyTree:
     """
     Build complete tree of all dependencies and sub-dependencies.
@@ -103,56 +207,7 @@ def build_dependency_tree(self, root_apm_yml: Path) -> DependencyTree:
             level_items.append(processing_queue.popleft())
 
         # --- Phase A (main thread): dedup + node creation ---
-        # Each work_item is (node, dep_ref, parent_node, is_dev)
-        # and represents a NEW node that needs its package loaded.
-        # Items that hit the existing-node fast-path or exceed
-        # ``max_depth`` are resolved here and never reach the worker
-        # pool.
-        work_items: list[tuple[DependencyNode, DependencyReference, DependencyNode | None, bool]]
-        work_items = []
-        for dep_ref, depth, parent_node, is_dev in level_items:
-            # Remove from queued set since we're now processing this dependency
-            queued_keys.discard(dep_ref.get_unique_key())
-
-            # Check maximum depth to prevent infinite recursion
-            if depth > self.max_depth:
-                continue
-
-            # Check if we already processed this dependency at this level or higher
-            existing_node = tree.get_node(dep_ref.get_unique_key())
-            if existing_node and existing_node.depth <= depth:
-                # Prod wins over dev: if existing was dev and this is prod, promote it
-                if existing_node.is_dev and not is_dev:
-                    existing_node.is_dev = False
-                # We've already processed this dependency at a shallower or equal depth
-                # Create parent-child relationship if parent exists
-                if parent_node and existing_node not in parent_node.children:
-                    parent_node.children.append(existing_node)
-                continue
-
-            # Create a new node for this dependency
-            # Note: In a real implementation, we would load the actual package here
-            # For now, create a placeholder package
-            placeholder_package = APMPackage(
-                name=dep_ref.get_display_name(), version="unknown", source=dep_ref.repo_url
-            )
-
-            node = DependencyNode(
-                package=placeholder_package,
-                dependency_ref=dep_ref,
-                depth=depth,
-                parent=parent_node,
-                is_dev=is_dev,
-            )
-
-            # Add to tree
-            tree.add_node(node)
-
-            # Create parent-child relationship
-            if parent_node:
-                parent_node.children.append(node)
-
-            work_items.append((node, dep_ref, parent_node, is_dev))
+        work_items = _build_phase_a_work_items(tree, level_items, queued_keys, self.max_depth)
 
         # --- Phase B (workers): load packages ---
         if not work_items:
@@ -179,38 +234,9 @@ def build_dependency_tree(self, root_apm_yml: Path) -> DependencyTree:
                 results = list(executor.map(self._load_work_item, work_items))
 
         # --- Phase C (main thread): integrate results, enqueue sub-deps ---
-        for (node, dep_ref, _parent_node, is_dev), loaded_package, exc in results:
-            if exc is not None:
-                if isinstance(exc, ValueError):
-                    _logger.warning(
-                        "Invalid transitive apm.yml for %s: %s",
-                        dep_ref.get_display_name(),
-                        exc,
-                    )
-                else:
-                    _logger.debug(
-                        "Could not load transitive apm.yml for %s: %s",
-                        dep_ref.get_display_name(),
-                        exc,
-                    )
-                continue
-            if loaded_package:
-                # Update the node with the actual loaded package
-                node.package = loaded_package
-
-                # Get sub-dependencies and add them to the processing queue
-                # Transitive deps inherit is_dev from parent. Iteration
-                # order matches the manifest's declaration order, which
-                # ``loaded_package.get_apm_dependencies()`` preserves.
-                sub_dependencies = loaded_package.get_apm_dependencies()
-                for sub_dep in sub_dependencies:
-                    if sub_dep.is_parent_repo_inheritance:
-                        sub_dep = self.expand_parent_repo_decl(node.dependency_ref, sub_dep)
-                    # Avoid infinite recursion by checking if we're already processing this dep
-                    # Use O(1) set lookup instead of O(n) list comprehension
-                    if sub_dep.get_unique_key() not in queued_keys:
-                        processing_queue.append((sub_dep, node.depth + 1, node, is_dev))
-                        queued_keys.add(sub_dep.get_unique_key())
+        _integrate_phase_c_results(
+            results, processing_queue, queued_keys, self.expand_parent_repo_decl
+        )
 
     return tree
 

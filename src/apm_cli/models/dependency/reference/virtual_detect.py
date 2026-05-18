@@ -49,6 +49,47 @@ def virtual_suffix_is_installable_shape(cls, virtual_path: str) -> bool:
 
 
 @classmethod
+def _compute_min_base_segments(
+    cls,
+    path_segments: list,
+    validated_host: "str | None",
+    is_ado: bool,
+    is_artifactory: bool,
+    is_generic_host: bool,
+    is_gitlab_host: bool,
+) -> int:
+    """Return the minimum path-segment count that forms the repo base address.
+
+    The virtual-package content begins immediately after the base, so the
+    minimum total segment count for a valid virtual path equals this value
+    plus one.  Extracted from :func:`_detect_virtual_package` to reduce its
+    McCabe complexity within the configured Ruff thresholds.
+    """
+    min_base_segments = 2
+    if is_ado:
+        # *.visualstudio.com encodes org in the subdomain; path is proj/repo (2 parts).
+        # dev.azure.com encodes org as the first path segment; path is org/proj/repo (3 parts).
+        min_base_segments = (
+            2 if validated_host and is_visualstudio_legacy_hostname(validated_host) else 3
+        )
+    elif is_artifactory:
+        # Artifactory: artifactory/{repo-key}/{owner}/{repo}
+        min_base_segments = 4
+    elif is_generic_host:
+        has_virtual_ext = any(
+            any(seg.endswith(ext) for ext in cls.VIRTUAL_FILE_EXTENSIONS) for seg in path_segments
+        )
+        has_collection = "collections" in path_segments
+        if is_gitlab_host:
+            min_base_segments = cls._gitlab_shorthand_repo_segment_count(
+                path_segments, has_virtual_ext, has_collection
+            )
+        elif not (has_virtual_ext or has_collection):
+            min_base_segments = len(path_segments)
+    return min_base_segments
+
+
+@classmethod
 def _detect_virtual_package(cls, dependency_str: str):
     """Detect whether *dependency_str* refers to a virtual package.
 
@@ -109,31 +150,9 @@ def _detect_virtual_package(cls, dependency_str: str):
     # Detect Artifactory VCS paths (artifactory/{repo-key}/{owner}/{repo})
     is_artifactory = is_generic_host and is_artifactory_path(path_segments)
 
-    if is_ado:
-        # *.visualstudio.com encodes org in the subdomain; path is proj/repo (2 parts).
-        # dev.azure.com encodes org as the first path segment; path is org/proj/repo (3 parts).
-        if validated_host and is_visualstudio_legacy_hostname(validated_host):
-            min_base_segments = 2
-        else:
-            min_base_segments = 3
-    elif is_artifactory:
-        # Artifactory: artifactory/{repo-key}/{owner}/{repo}
-        min_base_segments = 4
-    elif is_generic_host:
-        has_virtual_ext = any(
-            any(seg.endswith(ext) for ext in cls.VIRTUAL_FILE_EXTENSIONS) for seg in path_segments
-        )
-        has_collection = "collections" in path_segments
-        if is_gitlab_host:
-            min_base_segments = cls._gitlab_shorthand_repo_segment_count(
-                path_segments, has_virtual_ext, has_collection
-            )
-        elif has_virtual_ext or has_collection:
-            min_base_segments = 2
-        else:
-            min_base_segments = len(path_segments)
-    else:
-        min_base_segments = 2
+    min_base_segments = cls._compute_min_base_segments(
+        path_segments, validated_host, is_ado, is_artifactory, is_generic_host, is_gitlab_host
+    )
 
     min_virtual_segments = min_base_segments + 1
 

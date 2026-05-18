@@ -27,6 +27,7 @@ APM_DEPS_AVAILABLE = False
 try:
     from ...deps.lockfile import LockFile, get_lockfile_path
     from ...integration.mcp_integrator import MCPIntegrator
+    from ...integration.mcp_integrator_install.opts import MCPInstallOpts as _MCPInstallOpts
 
     APM_DEPS_AVAILABLE = True
 except ImportError:
@@ -121,11 +122,13 @@ def run_mcp_install(params: MCPInstallParams | None = None, **kwargs: object) ->
                 old_configs = dict(_existing_lock.mcp_configs) if _existing_lock else {}
                 MCPIntegrator.install(
                     [dep],
-                    runtime,
-                    exclude,
-                    verbose,
-                    stored_mcp_configs=old_configs,
-                    scope=scope,
+                    _MCPInstallOpts(
+                        runtime=runtime,
+                        exclude=exclude,
+                        verbose=verbose,
+                        stored_mcp_configs=old_configs,
+                        scope=scope,
+                    ),
                 )
                 new_names = MCPIntegrator.get_server_names([dep])
                 new_configs = MCPIntegrator.get_server_configs([dep])

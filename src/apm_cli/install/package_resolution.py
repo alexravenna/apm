@@ -141,10 +141,11 @@ def persist_dependency_list_if_changed(
     apm_yml_path: Any,
     apm_yml_filename: str,
     logger: Any = None,
-    rich_error: Callable[[str], None],
-    sys_exit: Callable[[int], None],
+    **kwargs,
 ) -> None:
     """Write *apm.yml* when *current_deps* was updated without new packages."""
+    rich_error = kwargs.get("rich_error")
+    sys_exit = kwargs.get("sys_exit", __import__("sys").exit)
     if not dependencies_changed:
         return
     data[dep_section]["apm"] = current_deps
@@ -157,6 +158,6 @@ def persist_dependency_list_if_changed(
     except Exception as e:
         if logger:
             logger.error(f"Failed to write {apm_yml_filename}: {e}")
-        else:
+        elif rich_error:
             rich_error(f"Failed to write {apm_yml_filename}: {e}")
         sys_exit(1)

@@ -169,6 +169,95 @@ def apm_binary():
     pytest.skip("APM binary not found. Build it first with: python -m build")
 
 
+def _setup_copilot_project(apm_binary: str, project_workspace: str) -> Path:
+    """Initialise a minimal Copilot project and return its directory.
+
+    Creates the project via ``apm init``, adds a hello-world prompt,
+    a minimal ``.apm/instructions/`` file, and updates ``apm.yml``
+    with the Copilot start script.
+    """
+    import yaml
+
+    project_dir = Path(project_workspace) / "my-ai-native-project"
+
+    print("\n=== Step 3: Transform your project with AI-Native structure ===")
+    result = run_command(
+        f"{apm_binary} init my-ai-native-project --yes --target copilot",
+        cwd=project_workspace,
+        show_output=True,
+    )
+    assert result.returncode == 0, f"Project init failed: {result.stderr}"
+    assert project_dir.exists(), "Project directory not created"
+
+    # Verify minimal project structure (new behavior: only apm.yml created)
+    assert (project_dir / "apm.yml").exists(), "apm.yml not created"
+
+    # NEW: Create template files manually (simulating user workflow in minimal mode)
+    print("\n=== Creating project files (minimal mode workflow) ===")
+
+    # Create hello-world.prompt.md
+    prompt_content = """---
+description: Hello World prompt for testing
+---
+
+# Hello World Prompt
+
+This is a test prompt for {{name}}.
+
+Say hello to {{name}}!
+"""
+    (project_dir / "hello-world.prompt.md").write_text(prompt_content)
+
+    # Create .apm directory structure with minimal instructions
+    apm_dir = project_dir / ".apm"
+    apm_dir.mkdir(exist_ok=True)
+    (apm_dir / "instructions").mkdir(exist_ok=True)
+
+    # Create a minimal instruction file
+    instruction_content = """---
+applyTo: "**"
+description: Test instructions for E2E
+---
+
+# Test Instructions
+
+Basic instructions for E2E testing.
+"""
+    (apm_dir / "instructions" / "test.instructions.md").write_text(instruction_content)
+
+    # Update apm.yml to add start script
+    apm_yml_path = project_dir / "apm.yml"
+    with open(apm_yml_path) as f:
+        config = yaml.safe_load(f)
+
+    # Add start script for copilot
+    if "scripts" not in config:
+        config["scripts"] = {}
+    config["scripts"]["start"] = (
+        "copilot --log-level all --log-dir copilot-logs --allow-all-tools -p hello-world.prompt.md"
+    )
+
+    with open(apm_yml_path, "w") as f:
+        yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
+
+    print("✓ Created hello-world.prompt.md, .apm/ directory, and updated apm.yml")
+
+    # Show project contents for debugging
+    print("\n=== Project structure ===")
+    apm_yml_content = (project_dir / "apm.yml").read_text()
+    print(f"apm.yml:\n{apm_yml_content}")
+    print(f"hello-world.prompt.md:\n{prompt_content[:500]}...")
+
+    # List created files
+    created_files = list(project_dir.rglob("*"))
+    print(f"\n=== Created Files ({len([f for f in created_files if f.is_file()])} files) ===")
+    for f in sorted([f for f in created_files if f.is_file()]):
+        rel_path = f.relative_to(project_dir)
+        print(f"  {rel_path}")
+
+    return project_dir
+
+
 class TestGoldenScenarioE2E:
     """End-to-end tests for the exact README hero quick start scenario."""
 
@@ -222,86 +311,7 @@ class TestGoldenScenarioE2E:
 
         # Step 2: Initialize project (equivalent to: apm init my-ai-native-project)
         with tempfile.TemporaryDirectory() as project_workspace:
-            project_dir = Path(project_workspace) / "my-ai-native-project"
-
-            print("\n=== Step 3: Transform your project with AI-Native structure ===")
-            result = run_command(
-                f"{apm_binary} init my-ai-native-project --yes --target copilot",
-                cwd=project_workspace,
-                show_output=True,
-            )
-            assert result.returncode == 0, f"Project init failed: {result.stderr}"
-            assert project_dir.exists(), "Project directory not created"
-
-            # Verify minimal project structure (new behavior: only apm.yml created)
-            assert (project_dir / "apm.yml").exists(), "apm.yml not created"
-
-            # NEW: Create template files manually (simulating user workflow in minimal mode)
-            print("\n=== Creating project files (minimal mode workflow) ===")
-
-            # Create hello-world.prompt.md
-            prompt_content = """---
-description: Hello World prompt for testing
----
-
-# Hello World Prompt
-
-This is a test prompt for {{name}}.
-
-Say hello to {{name}}!
-"""
-            (project_dir / "hello-world.prompt.md").write_text(prompt_content)
-
-            # Create .apm directory structure with minimal instructions
-            apm_dir = project_dir / ".apm"
-            apm_dir.mkdir(exist_ok=True)
-            (apm_dir / "instructions").mkdir(exist_ok=True)
-
-            # Create a minimal instruction file
-            instruction_content = """---
-applyTo: "**"
-description: Test instructions for E2E
----
-
-# Test Instructions
-
-Basic instructions for E2E testing.
-"""
-            (apm_dir / "instructions" / "test.instructions.md").write_text(instruction_content)
-
-            # Update apm.yml to add start script
-            import yaml
-
-            apm_yml_path = project_dir / "apm.yml"
-            with open(apm_yml_path) as f:
-                config = yaml.safe_load(f)
-
-            # Add start script for copilot
-            if "scripts" not in config:
-                config["scripts"] = {}
-            config["scripts"]["start"] = (
-                "copilot --log-level all --log-dir copilot-logs --allow-all-tools -p hello-world.prompt.md"
-            )
-
-            with open(apm_yml_path, "w") as f:
-                yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
-
-            print("✓ Created hello-world.prompt.md, .apm/ directory, and updated apm.yml")
-
-            # Show project contents for debugging
-            print("\n=== Project structure ===")
-            apm_yml_content = (project_dir / "apm.yml").read_text()
-            print(f"apm.yml:\n{apm_yml_content}")
-            print(f"hello-world.prompt.md:\n{prompt_content[:500]}...")
-
-            # List created files
-            created_files = list(project_dir.rglob("*"))
-            print(
-                f"\n=== Created Files ({len([f for f in created_files if f.is_file()])} files) ==="
-            )
-            for f in sorted([f for f in created_files if f.is_file()]):
-                rel_path = f.relative_to(project_dir)
-                print(f"  {rel_path}")
+            project_dir = _setup_copilot_project(apm_binary, project_workspace)
 
             # Step 4: Compile Agent Primitives for any coding agent (equivalent to: apm compile)
             print("\n=== Step 4: Compile Agent Primitives for any coding agent ===")

@@ -10,6 +10,17 @@ _PROTOCOL_FALLBACK_DOCS_URL = (
     "https://microsoft.github.io/apm/guides/dependencies/#restoring-the-legacy-permissive-chain"
 )
 
+# Maps RemoteProgress operation flag to human-readable name.
+_OP_TABLE = [
+    (RemoteProgress.COUNTING, "Counting objects"),
+    (RemoteProgress.COMPRESSING, "Compressing objects"),
+    (RemoteProgress.WRITING, "Writing objects"),
+    (RemoteProgress.RECEIVING, "Receiving objects"),
+    (RemoteProgress.RESOLVING, "Resolving deltas"),
+    (RemoteProgress.FINDING_SOURCES, "Finding sources"),
+    (RemoteProgress.CHECKING_OUT, "Checking out files"),
+]
+
 
 class GitProgressReporter(RemoteProgress):
     """Report git clone progress to Rich Progress."""
@@ -52,22 +63,7 @@ class GitProgressReporter(RemoteProgress):
 
     def _get_op_name(self, op_code):
         """Convert git operation code to human-readable name."""
-        from git import RemoteProgress
-
-        # Extract operation type from op_code
-        if op_code & RemoteProgress.COUNTING:
-            return "Counting objects"
-        elif op_code & RemoteProgress.COMPRESSING:
-            return "Compressing objects"
-        elif op_code & RemoteProgress.WRITING:
-            return "Writing objects"
-        elif op_code & RemoteProgress.RECEIVING:
-            return "Receiving objects"
-        elif op_code & RemoteProgress.RESOLVING:
-            return "Resolving deltas"
-        elif op_code & RemoteProgress.FINDING_SOURCES:
-            return "Finding sources"
-        elif op_code & RemoteProgress.CHECKING_OUT:
-            return "Checking out files"
-        else:
-            return "Cloning"
+        for flag, name in _OP_TABLE:
+            if op_code & flag:
+                return name
+        return "Cloning"

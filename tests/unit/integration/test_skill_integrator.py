@@ -16,6 +16,7 @@ from apm_cli.integration.skill_integrator import (
     to_hyphen_case,
     validate_skill_name,
 )
+from apm_cli.integration.skill_integrator.opts import SkillOpts
 from apm_cli.integration.targets import TargetProfile
 from apm_cli.models.apm_package import (
     APMPackage,
@@ -326,24 +327,22 @@ class TestSkillIntegrator:
 
     # ========== integrate_package_skill tests ==========
 
-    def _create_package_info(
-        self,
-        name: str = "test-pkg",
-        version: str = "1.0.0",
-        commit: str = "abc123",
-        install_path: Path | None = None,
-        source: str | None = None,
-        description: str | None = None,
-        dependency_ref: DependencyReference = None,
-        package_type: PackageType = None,
-        content_type: "PackageContentType" = None,
-    ) -> PackageInfo:
+    def _create_package_info(self, **kwargs) -> PackageInfo:
         """Helper to create PackageInfo objects for tests.
 
         Args:
             package_type: Internal detection type (CLAUDE_SKILL, HYBRID, APM_PACKAGE)
             content_type: Explicit type from apm.yml (skill, hybrid, instructions, prompts)
         """
+        name = kwargs.get("name", "test-pkg")
+        version = kwargs.get("version", "1.0.0")
+        commit = kwargs.get("commit", "abc123")
+        install_path = kwargs.get("install_path")
+        source = kwargs.get("source")
+        description = kwargs.get("description")
+        dependency_ref = kwargs.get("dependency_ref")
+        package_type = kwargs.get("package_type")
+        content_type = kwargs.get("content_type")
         package = APMPackage(
             name=name,
             version=version,
@@ -1003,23 +1002,21 @@ class TestCopySkillToTarget:
         """Clean up after tests."""
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def _create_package_info(
-        self,
-        name: str = "test-pkg",
-        version: str = "1.0.0",
-        commit: str = "abc123",
-        install_path: Path | None = None,
-        source: str | None = None,
-        description: str | None = None,
-        dependency_ref: DependencyReference = None,
-        pkg_type: PackageContentType = None,
-        package_type: PackageType = PackageType.CLAUDE_SKILL,
-    ) -> PackageInfo:
+    def _create_package_info(self, **kwargs) -> PackageInfo:
         """Helper to create PackageInfo objects for tests.
 
         For native skill tests, package_type defaults to CLAUDE_SKILL since
         these packages have SKILL.md and should be installed to .github/skills/.
         """
+        name = kwargs.get("name", "test-pkg")
+        version = kwargs.get("version", "1.0.0")
+        commit = kwargs.get("commit", "abc123")
+        install_path = kwargs.get("install_path")
+        source = kwargs.get("source")
+        description = kwargs.get("description")
+        dependency_ref = kwargs.get("dependency_ref")
+        pkg_type = kwargs.get("pkg_type")
+        package_type = kwargs.get("package_type", PackageType.CLAUDE_SKILL)
         package = APMPackage(
             name=name,
             version=version,
@@ -1580,7 +1577,9 @@ Use this skill for comprehensive guidance.
         diag = DiagnosticCollector()
 
         with patch.object(SkillIntegrator, "_build_native_skill_owner_map", return_value=owner_map):
-            self.integrator.integrate_package_skill(pkg_b, self.project_root, diagnostics=diag)
+            self.integrator.integrate_package_skill(
+                pkg_b, self.project_root, SkillOpts(diagnostics=diag)
+            )
 
         # The overwrite should have been recorded as a diagnostic.
         assert diag.has_diagnostics, "Expected an overwrite diagnostic but none were recorded"
@@ -1617,7 +1616,9 @@ Use this skill for comprehensive guidance.
         diag = DiagnosticCollector()
 
         with patch.object(SkillIntegrator, "_build_native_skill_owner_map", return_value=owner_map):
-            self.integrator.integrate_package_skill(pkg, self.project_root, diagnostics=diag)
+            self.integrator.integrate_package_skill(
+                pkg, self.project_root, SkillOpts(diagnostics=diag)
+            )
 
         # Self-reinstall -- no overwrite diagnostic should be recorded.
         assert not diag.has_diagnostics, "Self-reinstall should not produce a collision diagnostic"
@@ -1679,7 +1680,9 @@ Use this skill for comprehensive guidance.
         )
 
         diag = DiagnosticCollector()
-        self.integrator.integrate_package_skill(pkg_b, self.project_root, diagnostics=diag)
+        self.integrator.integrate_package_skill(
+            pkg_b, self.project_root, SkillOpts(diagnostics=diag)
+        )
 
         # An overwrite diagnostic must be recorded because the previous owner
         # (brandonwise/humanizer) differs from the incoming package.
@@ -1709,7 +1712,9 @@ Use this skill for comprehensive guidance.
         )
 
         diag_a = DiagnosticCollector()
-        self.integrator.integrate_package_skill(pkg_a, self.project_root, diagnostics=diag_a)
+        self.integrator.integrate_package_skill(
+            pkg_a, self.project_root, SkillOpts(diagnostics=diag_a)
+        )
 
         # No diagnostic for the first install.
         assert not diag_a.has_diagnostics
@@ -1740,7 +1745,9 @@ Use this skill for comprehensive guidance.
         )
 
         diag_b = DiagnosticCollector()
-        self.integrator.integrate_package_skill(pkg_b, self.project_root, diagnostics=diag_b)
+        self.integrator.integrate_package_skill(
+            pkg_b, self.project_root, SkillOpts(diagnostics=diag_b)
+        )
 
         # The second install should trigger a collision diagnostic via session tracking.
         assert diag_b.has_diagnostics, "Same-run collision not detected without lockfile"
@@ -1822,7 +1829,9 @@ Use this skill for comprehensive guidance.
             "_build_ownership_maps",
             return_value=({}, {"humanizer": "brandonwise/humanizer"}),
         ):
-            self.integrator.integrate_package_skill(pkg, self.project_root, diagnostics=diag)
+            self.integrator.integrate_package_skill(
+                pkg, self.project_root, SkillOpts(diagnostics=diag)
+            )
 
         groups = diag.by_category()
         assert CATEGORY_OVERWRITE in groups
@@ -2868,9 +2877,7 @@ class TestSubSkillContentSkipAndCollisionProtection:
         self.integrator.integrate_package_skill(
             pkg_info,
             self.project_root,
-            diagnostics=diag,
-            managed_files=managed_files,
-            force=False,
+            SkillOpts(diagnostics=diag, managed_files=managed_files, force=False),
         )
 
         # User content should be preserved
@@ -2899,8 +2906,7 @@ class TestSubSkillContentSkipAndCollisionProtection:
         self.integrator.integrate_package_skill(
             pkg_info,
             self.project_root,
-            managed_files=managed_files,
-            force=True,
+            SkillOpts(managed_files=managed_files, force=True),
         )
 
         # Should be overwritten
@@ -2929,9 +2935,7 @@ class TestSubSkillContentSkipAndCollisionProtection:
             self.integrator.integrate_package_skill(
                 pkg_info,
                 self.project_root,
-                diagnostics=diag,
-                managed_files=managed_files,
-                force=False,
+                SkillOpts(diagnostics=diag, managed_files=managed_files, force=False),
             )
 
         # Should NOT have printed an inline warning
@@ -2969,9 +2973,7 @@ class TestSubSkillContentSkipAndCollisionProtection:
             self.integrator.integrate_package_skill(
                 pkg_info,
                 self.project_root,
-                diagnostics=diag,
-                managed_files=managed_files,
-                force=False,
+                SkillOpts(diagnostics=diag, managed_files=managed_files, force=False),
             )
 
         # Self-overwrite -- no diagnostics should be recorded
@@ -3830,7 +3832,7 @@ class TestIntegrateNativeSkillCowork:
                 pkg_info,
                 project_root,
                 pkg_dir / "SKILL.md",
-                targets=[cowork_target],
+                SkillOpts(targets=[cowork_target]),
             )
         deployed_skill = cowork_root / "my-skill" / "SKILL.md"
         assert deployed_skill.exists()
@@ -3854,7 +3856,7 @@ class TestIntegrateNativeSkillCowork:
                 pkg_info,
                 project_root,
                 pkg_dir / "SKILL.md",
-                targets=[cowork_target],
+                SkillOpts(targets=[cowork_target]),
             )
         assert not (project_root / "copilot-cowork").exists()
 
@@ -3877,7 +3879,7 @@ class TestIntegrateNativeSkillCowork:
                 pkg_info,
                 project_root,
                 pkg_dir / "SKILL.md",
-                targets=[cowork_target],
+                SkillOpts(targets=[cowork_target]),
             )
         assert any(p.is_absolute() for p in result.target_paths)
         assert any(str(p).startswith(str(cowork_root)) for p in result.target_paths)
@@ -3957,7 +3959,7 @@ class TestPromoteSubSkillsCowork:
                 pkg_info,
                 project_root,
                 pkg_dir / "SKILL.md",
-                targets=[cowork_target],
+                SkillOpts(targets=[cowork_target]),
             )
         deployed_skill = cowork_root / "my-skill" / "SKILL.md"
         assert deployed_skill.exists()

@@ -50,19 +50,14 @@ def _derive_leaf_host(source: str, project_root: Path) -> str | None:
     * ``org:<owner>/<repo>`` (2 slash-segments) -> ``github.com`` (default)
     * ``file:<path>`` -> fall back to git remote of *project_root*
     """
-    if not source:  # noqa: SIM108
-        bare = ""
-    else:
-        bare = _strip_source_prefix(source)
+    bare = _strip_source_prefix(source) if source else ""
 
     if source.startswith("url:") or bare.startswith("https://") or bare.startswith("http://"):
         try:
-            parsed = urlparse(bare)
-            if parsed.hostname:
-                return parsed.hostname.lower()
+            hostname = urlparse(bare).hostname
         except Exception:
-            return None
-        return None
+            hostname = None
+        return hostname.lower() if hostname else None
 
     if source.startswith("org:") or (bare and "://" not in bare and bare.count("/") >= 1):
         parts = bare.split("/")

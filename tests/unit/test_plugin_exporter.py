@@ -97,16 +97,16 @@ def _make_apm_dir(
 
 def _setup_plugin_project(
     tmp_path: Path,
-    *,
-    deps: list[LockedDependency] | None = None,
-    agents: list[str] | None = None,
-    skills: dict[str, list[str]] | None = None,
-    prompts: list[str] | None = None,
-    instructions: list[str] | None = None,
-    commands: list[str] | None = None,
-    apm_yml_extra: dict | None = None,
-    plugin_json: dict | None = None,
+    **kwargs,
 ) -> Path:
+    deps = kwargs.get("deps")
+    agents = kwargs.get("agents")
+    skills = kwargs.get("skills")
+    prompts = kwargs.get("prompts")
+    instructions = kwargs.get("instructions")
+    commands = kwargs.get("commands")
+    apm_yml_extra = kwargs.get("apm_yml_extra")
+    plugin_json = kwargs.get("plugin_json")
     project = tmp_path / "project"
     project.mkdir()
     _write_apm_yml(project, extra=apm_yml_extra)

@@ -6,14 +6,23 @@ import os
 from pathlib import Path
 
 from ..constants import DEFAULT_SKIP_DIRS
+from ..deps.lockfile import LockFile
+from ..models.apm_package import APMPackage
 from ..utils.exclude import should_exclude, validate_exclude_patterns
 from ..utils.paths import portable_relpath
+from ._dependency_order import get_dependency_declaration_order as _get_dependency_declaration_order
 from .models import PrimitiveCollection
 from .parser import parse_primitive_file, parse_skill_file
 
 logger = logging.getLogger(__name__)
-from ..deps.lockfile import LockFile  # noqa: E402
-from ..models.apm_package import APMPackage  # noqa: E402
+
+
+def get_dependency_declaration_order(base_dir: str) -> list[str]:
+    """Preserve legacy patch targets for dependency-order discovery."""
+    return _get_dependency_declaration_order(
+        base_dir, apm_package_cls=APMPackage, lockfile_cls=LockFile
+    )
+
 
 # Common primitive patterns for local discovery (with recursive search)
 LOCAL_PRIMITIVE_PATTERNS: dict[str, list[str]] = {
@@ -216,120 +225,6 @@ def scan_dependency_primitives(base_dir: str, collection: PrimitiveCollection) -
 
         if dep_path.exists() and dep_path.is_dir():
             scan_directory_with_source(dep_path, collection, source=f"dependency:{dep_name}")
-
-
-def get_dependency_declaration_order(base_dir: str) -> list[str]:
-    """Get APM dependency installed paths in their declaration order.
-
-    The returned list contains the actual installed path for each dependency,
-    combining:
-    1. Direct dependencies from apm.yml (highest priority, declaration order)
-    2. Transitive dependencies from apm.lock (appended after direct deps)
-
-    This ensures transitive dependencies are included in primitive discovery
-    and compilation, not just direct dependencies. The installed path differs for:
-    - Regular packages: owner/repo (GitHub) or org/project/repo (ADO)
-    - Virtual packages: owner/virtual-pkg-name (GitHub) or org/project/virtual-pkg-name (ADO)
-
-    Args:
-        base_dir (str): Base directory containing apm.yml.
-
-    Returns:
-        List[str]: List of dependency installed paths in declaration order.
-    """
-    try:
-        apm_yml_path = Path(base_dir) / "apm.yml"
-        if not apm_yml_path.exists():
-            return []
-
-        package = APMPackage.from_apm_yml(apm_yml_path)
-        apm_dependencies = package.get_apm_dependencies()
-
-        # Extract installed paths from dependency references
-        # Virtual file/collection packages use get_virtual_package_name() (flattened),
-        # while virtual subdirectory packages use natural repo/subdir paths.
-        dependency_names = []
-        for dep in apm_dependencies:
-            if dep.alias:
-                dependency_names.append(dep.alias)
-            elif dep.is_virtual:
-                repo_parts = dep.repo_url.split("/")
-
-                if dep.is_virtual_subdirectory() and dep.virtual_path:
-                    # Virtual subdirectory packages keep natural path structure.
-                    # GitHub: owner/repo/subdir
-                    # ADO: org/project/repo/subdir
-                    if dep.is_azure_devops() and len(repo_parts) >= 3:
-                        dependency_names.append(
-                            f"{repo_parts[0]}/{repo_parts[1]}/{repo_parts[2]}/{dep.virtual_path}"
-                        )
-                    elif len(repo_parts) >= 2:
-                        dependency_names.append(
-                            f"{repo_parts[0]}/{repo_parts[1]}/{dep.virtual_path}"
-                        )
-                    else:
-                        dependency_names.append(dep.virtual_path)
-                else:
-                    # Virtual file/collection packages are flattened by package name.
-                    # GitHub: owner/virtual-pkg-name
-                    # ADO: org/project/virtual-pkg-name
-                    virtual_name = dep.get_virtual_package_name()
-                    if dep.is_azure_devops() and len(repo_parts) >= 3:
-                        dependency_names.append(f"{repo_parts[0]}/{repo_parts[1]}/{virtual_name}")
-                    elif len(repo_parts) >= 2:
-                        dependency_names.append(f"{repo_parts[0]}/{virtual_name}")
-                    else:
-                        dependency_names.append(virtual_name)
-            else:
-                # Regular packages: use full org/repo path
-                # This matches our org-namespaced directory structure
-                dependency_names.append(dep.repo_url)
-
-        # Include transitive dependencies from apm.lock
-        # Direct deps from apm.yml have priority; transitive deps are appended
-        lockfile_paths = LockFile.installed_paths_for_project(Path(base_dir))
-        direct_set = set(dependency_names)
-        for path in lockfile_paths:
-            if path not in direct_set:
-                dependency_names.append(path)
-
-        return dependency_names
-
-    except Exception as e:
-        print(f"Warning: Failed to parse dependency order from apm.yml: {e}")
-        return []
-
-
-def _glob_match(rel_path: str, pattern: str) -> bool:
-    """Match a relative path against a single glob pattern (supports ``**/`` prefix).
-
-    ``fnmatch.fnmatch`` already treats ``*`` as matching any character
-    including ``/``, so it handles single-segment wildcards over paths.
-    This helper adds support for a leading ``**/`` which means *zero or
-    more directory levels* — it strips the prefix and tries the remaining
-    sub-pattern against every suffix of *rel_path*.
-
-    Args:
-        rel_path: Forward-slash-normalised path relative to the walk root.
-        pattern: Glob pattern, e.g. ``agents/*.agent.md`` or
-            ``**/.apm/agents/*.agent.md``.
-    """
-    if pattern.startswith("**/"):
-        sub_pattern = pattern[3:]
-        # Try at root depth (zero-level match)
-        if fnmatch.fnmatch(rel_path, sub_pattern):
-            return True
-        # Try at every deeper suffix after each "/"
-        idx = 0
-        while True:
-            idx = rel_path.find("/", idx)
-            if idx == -1:
-                break
-            if fnmatch.fnmatch(rel_path[idx + 1 :], sub_pattern):
-                return True
-            idx += 1
-        return False
-    return fnmatch.fnmatch(rel_path, pattern)
 
 
 def _matches_any_pattern(rel_path: str, patterns: list[str]) -> bool:
@@ -577,14 +472,7 @@ def _exclude_matches_dir(
 
 
 def _is_readable(file_path: Path) -> bool:
-    """Check if a file is readable.
-
-    Args:
-        file_path (Path): Path to check.
-
-    Returns:
-        bool: True if file is readable, False otherwise.
-    """
+    """Check if a file is readable."""
     try:
         with open(file_path, encoding="utf-8") as f:
             # Try to read first few bytes to verify it's readable

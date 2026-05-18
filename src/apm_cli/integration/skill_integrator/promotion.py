@@ -5,21 +5,14 @@ from pathlib import Path
 
 from .class_ import SkillIntegrator
 from .naming import normalize_skill_name, validate_skill_name
+from .opts import SkillPromoteOpts
 
 
 def _promote_sub_skills(
     sub_skills_dir: Path,
     target_skills_root: Path,
     parent_name: str,
-    *,
-    warn: bool = True,
-    owned_by: dict[str, str] | None = None,
-    diagnostics=None,
-    managed_files=None,
-    force: bool = False,
-    project_root: Path | None = None,
-    logger=None,
-    name_filter: "set | None" = None,
+    opts: SkillPromoteOpts | None = None,
 ) -> tuple[int, list[Path]]:
     """Promote sub-skills from .apm/skills/ to top-level skill entries.
 
@@ -27,15 +20,20 @@ def _promote_sub_skills(
         sub_skills_dir: Path to the .apm/skills/ directory in the source package.
         target_skills_root: Root skills directory (e.g. .github/skills/ or .claude/skills/).
         parent_name: Name of the parent skill (used in warning messages).
-        warn: Whether to emit a warning on name collisions.
-        owned_by: Map of skill_name -> owner_package_name from the lockfile.
-            When provided, warnings are suppressed for self-overwrites.
-        diagnostics: Optional DiagnosticCollector for deferred warning output.
-        project_root: Project root for computing relative diagnostic paths.
+        opts: Optional :class:`SkillPromoteOpts` controlling warn, force, diagnostics, etc.
 
     Returns:
         tuple[int, list[Path]]: (count of promoted sub-skills, list of deployed dir paths)
     """
+    _opts = opts or SkillPromoteOpts()
+    warn = _opts.warn
+    owned_by = _opts.owned_by
+    diagnostics = _opts.diagnostics
+    managed_files = _opts.managed_files
+    force = _opts.force
+    project_root = _opts.project_root
+    logger = _opts.logger
+    name_filter = _opts.name_filter
     promoted = 0
     deployed = []
     if not sub_skills_dir.is_dir():
@@ -200,12 +198,14 @@ def _promote_sub_skills_standalone(
             sub_skills_dir,
             target_skills_root,
             parent_name,
-            warn=is_primary,
-            owned_by=owned_by if is_primary else None,
-            diagnostics=diagnostics if is_primary else None,
-            managed_files=managed_files if is_primary else None,
-            force=force,
-            project_root=project_root,
+            SkillPromoteOpts(
+                warn=is_primary,
+                owned_by=owned_by if is_primary else None,
+                diagnostics=diagnostics if is_primary else None,
+                managed_files=managed_files if is_primary else None,
+                force=force,
+                project_root=project_root,
+            ),
         )
         if is_primary:
             count = n

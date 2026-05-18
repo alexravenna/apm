@@ -152,6 +152,25 @@ class APMPackage:
         return parsed
 
     @classmethod
+    def _parse_includes(cls, includes_value) -> "str | list[str]":
+        """Parse and validate the ``includes`` field from ``apm.yml``.
+
+        Accepts the literal string ``"auto"`` or a list of strings.
+        Raises :class:`ValueError` on any other type or value.  Extracted from
+        :meth:`from_apm_yml` to reduce its McCabe complexity within the
+        configured Ruff thresholds.
+        """
+        if isinstance(includes_value, str):
+            if includes_value != "auto":
+                raise ValueError("'includes' must be 'auto' or a list of strings")
+            return "auto"
+        if isinstance(includes_value, list):
+            if not all(isinstance(item, str) for item in includes_value):
+                raise ValueError("'includes' must be 'auto' or a list of strings")
+            return list(includes_value)
+        raise ValueError("'includes' must be 'auto' or a list of strings")
+
+    @classmethod
     def from_apm_yml(
         cls,
         apm_yml_path: Path,
@@ -254,17 +273,7 @@ class APMPackage:
         # Parse includes (auto-publish opt-in): either the literal "auto" or a list of repo paths
         includes = None
         if "includes" in data and data["includes"] is not None:
-            includes_value = data["includes"]
-            if isinstance(includes_value, str):
-                if includes_value != "auto":
-                    raise ValueError("'includes' must be 'auto' or a list of strings")
-                includes = "auto"
-            elif isinstance(includes_value, list):
-                if not all(isinstance(item, str) for item in includes_value):
-                    raise ValueError("'includes' must be 'auto' or a list of strings")
-                includes = list(includes_value)
-            else:
-                raise ValueError("'includes' must be 'auto' or a list of strings")
+            includes = cls._parse_includes(data["includes"])
 
         # Parse target field through the same validator as --target so a CSV
         # string like ``target: "claude,copilot"`` resolves identically to

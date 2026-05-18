@@ -16,29 +16,18 @@ from apm_cli.marketplace.builder import (
 )
 
 
-def _make_output_report(
-    *,
-    profile: str = "claude",
-    output_path: str = ".claude-plugin/marketplace.json",
-    added: int = 0,
-    updated: int = 0,
-    unchanged: int = 0,
-    removed: int = 0,
-    errors: tuple[tuple[str, str], ...] = (),
-    warnings: tuple[str, ...] = (),
-    dry_run: bool = False,
-) -> MarketplaceOutputReport:
+def _make_output_report(**kwargs) -> MarketplaceOutputReport:
     return MarketplaceOutputReport(
-        profile=profile,
+        profile=kwargs.get("profile", "claude"),
         resolved=(),
-        errors=errors,
-        warnings=warnings,
-        added_count=added,
-        updated_count=updated,
-        unchanged_count=unchanged,
-        removed_count=removed,
-        output_path=Path(output_path),
-        dry_run=dry_run,
+        errors=kwargs.get("errors", ()),
+        warnings=kwargs.get("warnings", ()),
+        added_count=kwargs.get("added", 0),
+        updated_count=kwargs.get("updated", 0),
+        unchanged_count=kwargs.get("unchanged", 0),
+        removed_count=kwargs.get("removed", 0),
+        output_path=Path(kwargs.get("output_path", ".claude-plugin/marketplace.json")),
+        dry_run=kwargs.get("dry_run", False),
     )
 
 

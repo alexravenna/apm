@@ -35,6 +35,24 @@ class PackageValidator:
         """
         return base_validate_apm_package(package_path)
 
+    def _validate_path_prerequisites(self, package_path: Path, result: ValidationResult) -> bool:
+        """Check that *package_path* exists, is a directory, and contains ``apm.yml``.
+
+        Adds an error to *result* for each failed check.  Returns True only if
+        all three prerequisites are satisfied.
+        """
+        if not package_path.exists():
+            result.add_error(f"Package directory does not exist: {package_path}")
+            return False
+        if not package_path.is_dir():
+            result.add_error(f"Package path is not a directory: {package_path}")
+            return False
+        apm_yml = package_path / "apm.yml"
+        if not apm_yml.exists():
+            result.add_error("Missing required file: apm.yml")
+            return False
+        return True
+
     def validate_package_structure(self, package_path: Path) -> ValidationResult:
         """Validate APM package directory structure.
 
@@ -50,19 +68,9 @@ class PackageValidator:
         """
         result = ValidationResult()
 
-        if not package_path.exists():
-            result.add_error(f"Package directory does not exist: {package_path}")
+        if not self._validate_path_prerequisites(package_path, result):
             return result
-
-        if not package_path.is_dir():
-            result.add_error(f"Package path is not a directory: {package_path}")
-            return result
-
-        # Check for apm.yml
         apm_yml = package_path / "apm.yml"
-        if not apm_yml.exists():
-            result.add_error("Missing required file: apm.yml")
-            return result
 
         # Try to parse apm.yml
         try:

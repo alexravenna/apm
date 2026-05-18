@@ -121,6 +121,17 @@ def classify_host(host: str, port: int | None = None) -> HostInfo:
     )
 
 
+# Ordered prefix -> token-kind mapping used by detect_token_type.
+_TOKEN_PREFIXES: dict[str, str] = {
+    "github_pat_": "fine-grained",
+    "ghp_": "classic",
+    "ghu_": "oauth",
+    "gho_": "oauth",
+    "ghs_": "github-app",
+    "ghr_": "github-app",
+}
+
+
 def detect_token_type(token: str) -> str:
     """Classify a token string by its prefix.
 
@@ -130,25 +141,16 @@ def detect_token_type(token: str) -> str:
     account, not the token format.
 
     Prefix reference (docs.github.com):
-    - ``github_pat_`` → fine-grained PAT
-    - ``ghp_``        → classic PAT
-    - ``ghu_``        → OAuth user-to-server (e.g. ``gh auth login``)
-    - ``gho_``        → OAuth app token
-    - ``ghs_``        → GitHub App installation (server-to-server)
-    - ``ghr_``        → GitHub App refresh token
+    - ``github_pat_`` -> fine-grained PAT
+    - ``ghp_``        -> classic PAT
+    - ``ghu_``        -> OAuth user-to-server (e.g. ``gh auth login``)
+    - ``gho_``        -> OAuth app token
+    - ``ghs_``        -> GitHub App installation (server-to-server)
+    - ``ghr_``        -> GitHub App refresh token
     """
-    if token.startswith("github_pat_"):
-        return "fine-grained"
-    if token.startswith("ghp_"):
-        return "classic"
-    if token.startswith("ghu_"):
-        return "oauth"
-    if token.startswith("gho_"):
-        return "oauth"
-    if token.startswith("ghs_"):
-        return "github-app"
-    if token.startswith("ghr_"):
-        return "github-app"
+    for prefix, kind in _TOKEN_PREFIXES.items():
+        if token.startswith(prefix):
+            return kind
     return "unknown"
 
 

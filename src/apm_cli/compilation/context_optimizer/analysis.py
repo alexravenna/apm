@@ -6,7 +6,6 @@ following the Minimal Context Principle.
 """
 
 import builtins
-import fnmatch
 import os
 import time
 from pathlib import Path
@@ -18,23 +17,12 @@ from ...output.models import (
     ProjectAnalysis,
 )
 from ...primitives.models import Instruction
-from ...utils.exclude import should_exclude
 from ...utils.paths import portable_relpath
 from .class_ import DirectoryAnalysis, InheritanceAnalysis
 
 set = builtins.set
 list = builtins.list
 dict = builtins.dict
-DEFAULT_EXCLUDED_DIRNAMES = frozenset(
-    {
-        "node_modules",
-        "__pycache__",
-        ".git",
-        "dist",
-        "build",
-        "apm_modules",
-    }
-)
 
 
 def analyze_context_inheritance(
@@ -203,241 +191,6 @@ def get_compilation_results(
         errors=self._errors.copy(),
         is_dry_run=is_dry_run,
     )
-
-
-def _analyze_project_structure(self) -> None:
-    """Analyze the project structure and cache results."""
-    self._directory_cache.clear()
-    self._pattern_cache.clear()  # Also clear pattern cache for deterministic behavior
-
-    # Track visited directories to prevent infinite loops
-    visited_dirs = set()
-
-    for root, dirs, files in os.walk(self.base_dir):
-        current_path = Path(root)
-
-        # Safety check for infinite loops
-        if current_path in visited_dirs:
-            continue
-        visited_dirs.add(current_path)
-
-        # Calculate depth for analysis
-        try:
-            relative_path = current_path.resolve().relative_to(self.base_dir.resolve())
-            depth = len(relative_path.parts)
-        except ValueError:
-            depth = 0
-
-        # Skip hidden directories and common ignore patterns
-        if any(part.startswith(".") for part in current_path.parts[len(self.base_dir.parts) :]):
-            continue
-
-        # Default hardcoded exclusions  -- match on exact path components
-        if any(part in DEFAULT_EXCLUDED_DIRNAMES for part in relative_path.parts):
-            continue
-
-        # Apply configurable exclusion patterns
-        if self._should_exclude_path(current_path):
-            continue
-
-        # Prune subdirectories from os.walk to avoid descending into excluded paths
-        # This significantly improves performance by avoiding expensive traversal
-        # Note: Modifying dirs[:] (slice assignment) is the standard Python idiom
-        # to control which subdirectories os.walk will descend into
-        dirs[:] = [d for d in dirs if not self._should_exclude_subdir(current_path / d)]
-
-        # Analyze files in this directory
-        total_files = len([f for f in files if not f.startswith(".")])
-        if total_files == 0:
-            continue
-
-        analysis = DirectoryAnalysis(directory=current_path, depth=depth, total_files=total_files)
-
-        # Analyze file types
-        for file in files:
-            if file.startswith("."):
-                continue
-
-            file_path = current_path / file
-            analysis.file_types.add(file_path.suffix)
-
-        self._directory_cache[current_path] = analysis
-
-
-def _should_exclude_subdir(self, path: Path) -> bool:
-    """Check if a subdirectory should be pruned from os.walk traversal.
-
-    This is an optimization to avoid descending into excluded directories,
-    which significantly improves performance in large monorepos.
-
-    Args:
-        path: Subdirectory path to check
-
-    Returns:
-        True if subdirectory should be pruned from traversal
-    """
-    # Check if the subdirectory itself matches an exclusion pattern
-    if self._should_exclude_path(path):
-        return True
-
-    # Also check if subdirectory is a default exclusion
-    dir_name = path.name
-    if dir_name in DEFAULT_EXCLUDED_DIRNAMES:
-        return True
-
-    # Skip hidden directories
-    if dir_name.startswith("."):  # noqa: SIM103
-        return True
-
-    return False
-
-
-def _should_exclude_path(self, path: Path) -> bool:
-    """Check if a path matches any exclusion pattern.
-
-    Args:
-        path: Path to check against exclusion patterns
-
-    Returns:
-        True if path should be excluded, False otherwise
-    """
-    return should_exclude(path, self.base_dir, self._exclude_patterns)
-
-
-def _extract_intended_directory_from_pattern(self, pattern: str) -> Path | None:
-    """Extract the intended directory from a pattern like 'docs/**/*.md' -> 'docs'.
-
-    Args:
-        pattern (str): File pattern to analyze.
-
-    Returns:
-        Optional[Path]: Intended directory path, or None if pattern is global.
-    """
-    if not pattern or pattern.startswith("**/"):
-        return None  # Global pattern
-
-    if "/" in pattern:
-        # Extract the first directory component
-        parts = pattern.split("/")
-        first_part = parts[0]
-
-        # Skip if it's a wildcard
-        if "*" not in first_part and first_part:
-            intended_dir = self.base_dir / first_part
-            if intended_dir.exists() and intended_dir.is_dir():
-                return intended_dir
-
-    return None
-
-
-def _expand_glob_pattern(self, pattern: str) -> builtins.list[str]:
-    """Expand glob pattern with brace expansion, supporting multiple brace groups.
-
-    Args:
-        pattern (str): Pattern like '**/*.{css,scss}' or '**/*.{test,spec}.{ts,js}'
-
-    Returns:
-        List[str]: Expanded patterns like ['**/*.css', '**/*.scss']
-                   or ['**/*.test.ts', '**/*.test.js', '**/*.spec.ts', '**/*.spec.js']
-    """
-    import re
-
-    # Handle brace expansion like {css,scss}
-    brace_match = re.search(r"\{([^}]+)\}", pattern)
-    if brace_match:
-        alternatives = brace_match.group(1).split(",")
-        prefix = pattern[: brace_match.start()]
-        suffix = pattern[brace_match.end() :]
-        # Recursively expand remaining brace groups in each result
-        expanded = []
-        for alt in alternatives:
-            expanded.extend(self._expand_glob_pattern(prefix + alt + suffix))
-        return expanded
-
-    return [pattern]
-
-
-def _file_matches_pattern(self, file_path: Path, pattern: str) -> bool:
-    """Check if a file matches a given pattern with optimized performance.
-
-    Args:
-        file_path (Path): File path to check
-        pattern (str): Glob pattern to match against
-
-    Returns:
-        bool: True if file matches pattern
-    """
-    # Expand any brace patterns
-    expanded_patterns = self._expand_glob_pattern(pattern)
-
-    for expanded_pattern in expanded_patterns:
-        # For patterns with **, use cached glob results
-        if "**" in expanded_pattern:
-            try:
-                # Resolve both paths to handle symlinks and path inconsistencies
-                resolved_file = file_path.resolve()
-                rel_path = resolved_file.relative_to(self.base_dir.resolve())
-
-                # Use cached glob results instead of repeated glob calls
-                matches = self._cached_glob(expanded_pattern)
-                # Use cached Set[Path] to avoid recreating on every call
-                if expanded_pattern not in self._glob_set_cache:
-                    self._glob_set_cache[expanded_pattern] = {Path(match) for match in matches}
-                if rel_path in self._glob_set_cache[expanded_pattern]:
-                    return True
-            except (ValueError, OSError):
-                pass
-        else:
-            # For non-recursive patterns, use fnmatch as before
-            try:
-                rel_str = portable_relpath(file_path, self.base_dir)
-                if fnmatch.fnmatch(rel_str, expanded_pattern):
-                    return True
-            except ValueError:
-                pass
-
-            # Only use filename match for patterns without directory structure
-            # This prevents "docs/**/*.md" from matching any "*.md" file anywhere
-            if "/" not in expanded_pattern:
-                if fnmatch.fnmatch(file_path.name, expanded_pattern):
-                    return True
-
-    return False
-
-
-def _find_matching_directories(self, pattern: str) -> builtins.set[Path]:
-    """Find directories that contain files matching the pattern.
-
-    Args:
-        pattern (str): File pattern to match.
-
-    Returns:
-        Set[Path]: Set of directories with matching files.
-    """
-    # Use cached result if available
-    if pattern in self._pattern_cache:
-        return self._pattern_cache[pattern]
-
-    matching_dirs: builtins.set[Path] = set()
-
-    # Use the reliable approach for all patterns
-    for directory, analysis in sorted(self._directory_cache.items()):
-        try:
-            files = [f for f in directory.iterdir() if f.is_file() and not f.name.startswith(".")]
-
-            match_count = 0
-            for file_path in files:
-                if self._file_matches_pattern(file_path, pattern):
-                    match_count += 1
-                    matching_dirs.add(directory)
-
-            if match_count > 0:
-                analysis.pattern_matches[pattern] = match_count
-        except (OSError, PermissionError):
-            continue
-
-    self._pattern_cache[pattern] = matching_dirs
-    return matching_dirs
 
 
 def _calculate_inheritance_pollution(self, directory: Path, pattern: str) -> float:
@@ -676,3 +429,24 @@ def _is_instruction_relevant(self, instruction: Instruction, working_directory: 
     analysis.pattern_matches[pattern] = matching_files
 
     return matching_files > 0
+
+
+# ---------------------------------------------------------------------------
+# Re-exports from sibling private modules
+#
+# ``class_.py`` imports this module as ``_analysis`` and accesses every
+# function via attribute lookup (e.g. ``_analysis._analyze_project_structure``).
+# Importing the moved functions here keeps that interface intact without
+# requiring any changes to ``class_.py``.
+# ---------------------------------------------------------------------------
+from ._matching import (  # noqa: E402, F401
+    _expand_glob_pattern,
+    _extract_intended_directory_from_pattern,
+    _file_matches_pattern,
+    _find_matching_directories,
+)
+from ._traversal import (  # noqa: E402, F401
+    _analyze_project_structure,
+    _should_exclude_path,
+    _should_exclude_subdir,
+)

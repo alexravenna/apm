@@ -20,6 +20,199 @@ _COPILOT_ENV_RE = re.compile(r"<([A-Z_][A-Z0-9_]*)>|" + _ENV_VAR_RE.pattern)
 _LEGACY_ANGLE_VAR_RE = re.compile(r"<([A-Z_][A-Z0-9_]*)>")
 
 
+def _translate_dict_env_vars(self, env_vars, default_github_env):
+    """Translate dict-format env vars for runtime substitution.
+
+    Args:
+        env_vars: Dict of environment variable name -> value.
+        default_github_env: Dict of default GitHub env var values.
+
+    Returns:
+        dict: Translated environment variables.
+    """
+    translated = {}
+    placeholder_keys = []
+    for name, raw_value in env_vars.items():
+        if not name:
+            continue
+        if raw_value is None:
+            continue
+        if not isinstance(raw_value, str):
+            translated[name] = _stringify_env_literal(raw_value)
+            continue
+        if _has_env_placeholder(raw_value):
+            self._last_legacy_angle_vars.update(_extract_legacy_angle_vars(raw_value))
+            translated[name] = _translate_env_placeholder(raw_value)
+            # Record every ${VAR} in the translated value (handles
+            # both ${env:VAR} -> ${VAR} and bare ${VAR} cases).
+            for match in _ENV_VAR_RE.finditer(translated[name]):
+                placeholder_keys.append(match.group(1))
+        elif name in default_github_env and raw_value == default_github_env[name]:
+            translated[name] = raw_value
+        else:
+            # Literal value present in apm.yml -- replace with a
+            # runtime placeholder so the secret never touches disk.
+            translated[name] = "${" + name + "}"
+            placeholder_keys.append(name)
+    self._last_env_placeholder_keys = set(placeholder_keys)
+    return translated
+
+
+def _translate_list_env_vars(self, env_vars, default_github_env):
+    """Translate list-format env vars for runtime substitution.
+
+    Args:
+        env_vars: List of environment variable definitions.
+        default_github_env: Dict of default GitHub env var values.
+
+    Returns:
+        dict: Translated environment variables.
+    """
+    resolved = {}
+    placeholder_keys = []
+    for env_var in env_vars:
+        if not isinstance(env_var, dict):
+            continue
+        name = env_var.get("name", "")
+        if not name:
+            continue
+        if name in default_github_env:
+            # Non-secret literal default -- preserve as-is.
+            resolved[name] = default_github_env[name]
+        else:
+            # Emit a runtime-substitution placeholder; Copilot CLI
+            # resolves ``${NAME}`` from the host environment at
+            # server-start. APM never reads or stores the value.
+            resolved[name] = "${" + name + "}"
+            placeholder_keys.append(name)
+    # Record for the post-install summary line and the
+    # security-improvement notice.
+    self._last_env_placeholder_keys = set(placeholder_keys)
+    return resolved
+
+
+def _resolve_dict_env_vars(self, env_vars, env_overrides):
+    """Resolve dict-format env vars to literal values.
+
+    Args:
+        env_vars: Dict of environment variable name -> value.
+        env_overrides: Pre-collected environment variable overrides.
+
+    Returns:
+        dict: Resolved environment variables.
+    """
+    resolved = {}
+    for name, value in env_vars.items():
+        if not name:
+            continue
+        if isinstance(value, str):
+            resolved[name] = self._resolve_env_variable(name, value, env_overrides=env_overrides)
+        elif value is not None:
+            resolved[name] = _stringify_env_literal(value)
+    return resolved
+
+
+def _should_skip_prompting(env_overrides):
+    """Determine if prompting should be skipped.
+
+    Args:
+        env_overrides: Pre-collected environment variable overrides.
+
+    Returns:
+        bool: Whether to skip prompting.
+    """
+    import os
+    import sys
+
+    # If env_overrides is provided, it means the CLI has already handled environment variable collection
+    # In this case, we should NEVER prompt for additional variables
+    skip_prompting = bool(env_overrides)
+
+    # Check for CI/automated environment via APM_E2E_TESTS flag (more reliable than TTY detection)
+    if os.getenv("APM_E2E_TESTS") == "1":
+        skip_prompting = True
+        print(" APM_E2E_TESTS detected, will skip environment variable prompts")
+
+    # Also skip prompting if we're in a non-interactive environment (fallback)
+    is_interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    if not is_interactive:
+        skip_prompting = True
+
+    return skip_prompting
+
+
+def _collect_empty_value_vars(env_overrides):
+    """Track variables explicitly provided with empty values.
+
+    Args:
+        env_overrides: Pre-collected environment variable overrides.
+
+    Returns:
+        set: Variable names with empty values.
+    """
+    empty_value_vars = set()
+    if env_overrides:
+        for key, value in env_overrides.items():
+            if key in env_overrides and (not value or not value.strip()):
+                empty_value_vars.add(key)
+    return empty_value_vars
+
+
+def _resolve_single_env_var(
+    env_var, env_overrides, skip_prompting, empty_value_vars, default_github_env
+):
+    """Resolve a single environment variable from list format.
+
+    Args:
+        env_var: Environment variable definition dict.
+        env_overrides: Pre-collected environment variable overrides.
+        skip_prompting: Whether to skip interactive prompting.
+        empty_value_vars: Set of variable names with empty values.
+        default_github_env: Dict of default GitHub env var values.
+
+    Returns:
+        tuple: (name, value) or (None, None) if not resolved.
+    """
+    import os
+
+    from rich.prompt import Prompt
+
+    if not isinstance(env_var, dict):
+        return None, None
+
+    name = env_var.get("name", "")
+    description = env_var.get("description", "")
+    required = env_var.get("required", True)
+
+    if not name:
+        return None, None
+
+    # First check overrides, then environment
+    value = env_overrides.get(name) or os.getenv(name)
+
+    # Only prompt if not provided in overrides or environment AND it's required AND we're not in managed override mode
+    if not value and required and not skip_prompting:
+        prompt_text = f"Enter value for {name}"
+        if description:
+            prompt_text += f" ({description})"
+        value = Prompt.ask(
+            prompt_text,
+            password=bool("token" in name.lower() or "key" in name.lower()),
+        )
+
+    # Add variable if it has a value OR if user explicitly provided empty and we have a default
+    if value and value.strip():
+        return name, value
+    elif name in default_github_env and (
+        name in empty_value_vars or not required or skip_prompting
+    ):
+        # Use the default when: the user provided an empty value, the variable
+        # is optional, or we are in a non-interactive (skip-prompting) context.
+        return name, default_github_env[name]
+
+    return None, None
+
+
 def _resolve_environment_variables(self, env_vars, env_overrides=None):
     """Resolve (or translate) declared environment variables.
 
@@ -60,130 +253,27 @@ def _resolve_environment_variables(self, env_vars, env_overrides=None):
     # the key as a placeholder reference and emit ${NAME} so the
     # value never lands on disk). See issue #1152.
     if isinstance(env_vars, dict) and self._supports_runtime_env_substitution:
-        translated = {}
-        placeholder_keys = []
-        for name, raw_value in env_vars.items():
-            if not name:
-                continue
-            if raw_value is None:
-                continue
-            if not isinstance(raw_value, str):
-                translated[name] = _stringify_env_literal(raw_value)
-                continue
-            if _has_env_placeholder(raw_value):
-                self._last_legacy_angle_vars.update(_extract_legacy_angle_vars(raw_value))
-                translated[name] = _translate_env_placeholder(raw_value)
-                # Record every ${VAR} in the translated value (handles
-                # both ${env:VAR} -> ${VAR} and bare ${VAR} cases).
-                for match in _ENV_VAR_RE.finditer(translated[name]):
-                    placeholder_keys.append(match.group(1))
-            elif name in default_github_env and raw_value == default_github_env[name]:
-                translated[name] = raw_value
-            else:
-                # Literal value present in apm.yml -- replace with a
-                # runtime placeholder so the secret never touches disk.
-                translated[name] = "${" + name + "}"
-                placeholder_keys.append(name)
-        self._last_env_placeholder_keys = set(placeholder_keys)
-        return translated
+        return _translate_dict_env_vars(self, env_vars, default_github_env)
 
     if self._supports_runtime_env_substitution:
-        resolved = {}
-        placeholder_keys = []
-        for env_var in env_vars:
-            if not isinstance(env_var, dict):
-                continue
-            name = env_var.get("name", "")
-            if not name:
-                continue
-            if name in default_github_env:
-                # Non-secret literal default -- preserve as-is.
-                resolved[name] = default_github_env[name]
-            else:
-                # Emit a runtime-substitution placeholder; Copilot CLI
-                # resolves ``${NAME}`` from the host environment at
-                # server-start. APM never reads or stores the value.
-                resolved[name] = "${" + name + "}"
-                placeholder_keys.append(name)
-        # Record for the post-install summary line and the
-        # security-improvement notice.
-        self._last_env_placeholder_keys = set(placeholder_keys)
-        return resolved
+        return _translate_list_env_vars(self, env_vars, default_github_env)
 
     if isinstance(env_vars, dict):
-        resolved = {}
-        for name, value in env_vars.items():
-            if not name:
-                continue
-            if isinstance(value, str):
-                resolved[name] = self._resolve_env_variable(
-                    name, value, env_overrides=env_overrides
-                )
-            elif value is not None:
-                resolved[name] = _stringify_env_literal(value)
-        return resolved
+        return _resolve_dict_env_vars(self, env_vars, env_overrides)
 
-    import os
-    import sys
-
-    from rich.prompt import Prompt
-
+    # Legacy list-based resolution with interactive prompts
     resolved = {}
     env_overrides = env_overrides or {}
 
-    # If env_overrides is provided, it means the CLI has already handled environment variable collection
-    # In this case, we should NEVER prompt for additional variables
-    skip_prompting = bool(env_overrides)
-
-    # Check for CI/automated environment via APM_E2E_TESTS flag (more reliable than TTY detection)
-    if os.getenv("APM_E2E_TESTS") == "1":
-        skip_prompting = True
-        print(" APM_E2E_TESTS detected, will skip environment variable prompts")
-
-    # Also skip prompting if we're in a non-interactive environment (fallback)
-    is_interactive = sys.stdin.isatty() and sys.stdout.isatty()
-    if not is_interactive:
-        skip_prompting = True
-
-    # Track which variables were explicitly provided with empty values (user wants defaults)
-    empty_value_vars = set()
-    if env_overrides:
-        for key, value in env_overrides.items():
-            if key in env_overrides and (not value or not value.strip()):
-                empty_value_vars.add(key)
+    skip_prompting = _should_skip_prompting(env_overrides)
+    empty_value_vars = _collect_empty_value_vars(env_overrides)
 
     for env_var in env_vars:
-        if isinstance(env_var, dict):
-            name = env_var.get("name", "")
-            description = env_var.get("description", "")
-            required = env_var.get("required", True)
-
-            if name:
-                # First check overrides, then environment
-                value = env_overrides.get(name) or os.getenv(name)
-
-                # Only prompt if not provided in overrides or environment AND it's required AND we're not in managed override mode
-                if not value and required and not skip_prompting:
-                    prompt_text = f"Enter value for {name}"
-                    if description:
-                        prompt_text += f" ({description})"
-                    value = Prompt.ask(
-                        prompt_text,
-                        password=bool("token" in name.lower() or "key" in name.lower()),
-                    )
-
-                # Add variable if it has a value OR if user explicitly provided empty and we have a default
-                if value and value.strip():
-                    resolved[name] = value
-                elif name in empty_value_vars and name in default_github_env:
-                    # User provided empty value and we have a default - use default
-                    resolved[name] = default_github_env[name]
-                elif not required and name in default_github_env:
-                    # Variable is optional and we have a default - use default
-                    resolved[name] = default_github_env[name]
-                elif skip_prompting and name in default_github_env:
-                    # Non-interactive environment and we have a default - use default
-                    resolved[name] = default_github_env[name]
+        name, value = _resolve_single_env_var(
+            env_var, env_overrides, skip_prompting, empty_value_vars, default_github_env
+        )
+        if name and value:
+            resolved[name] = value
 
     return resolved
 

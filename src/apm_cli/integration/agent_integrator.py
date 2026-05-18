@@ -7,15 +7,14 @@ See skill-strategy.md for the full architectural rationale (T5).
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-import yaml
 
 from apm_cli.integration.base_integrator import BaseIntegrator, IntegrationResult
 from apm_cli.utils.path_security import PathTraversalError, ensure_path_within
 from apm_cli.utils.paths import portable_relpath
+
+from . import _agent_legacy, _agent_writers
 
 if TYPE_CHECKING:
     from apm_cli.integration.targets import TargetProfile
@@ -249,52 +248,19 @@ class AgentIntegrator(BaseIntegrator):
         return links_resolved
 
     # ------------------------------------------------------------------
-    # Codex agent transformer (MD -> TOML)
+    # Codex agent transformer (MD -> TOML)  -- implementation in _agent_writers
     # ------------------------------------------------------------------
-
-    _FRONTMATTER_RE = re.compile(
-        r"^---\s*\n(.*?)\n---\s*\n?",
-        re.DOTALL,
-    )
 
     @staticmethod
     def _write_codex_agent(source: Path, target: Path) -> None:
         """Transform an ``.agent.md`` file to Codex ``.toml`` format.
 
-        Parses YAML frontmatter for ``name`` and ``description``, uses
-        the markdown body as ``developer_instructions``.
+        Delegates to :func:`._agent_writers.write_codex_agent`.
         """
-        if source.is_symlink():
-            raise ValueError(f"Refusing to read symlink source: {source}")
-        import toml as _toml
-
-        content = source.read_text(encoding="utf-8")
-
-        name = source.stem
-        if name.endswith(".agent"):
-            name = name[: -len(".agent")]
-        description = ""
-        body = content
-
-        fm_match = AgentIntegrator._FRONTMATTER_RE.match(content)
-        if fm_match:
-            body = content[fm_match.end() :]
-            try:
-                fm = yaml.safe_load(fm_match.group(1)) or {}
-                name = fm.get("name", name)
-                description = fm.get("description", description)
-            except Exception:
-                pass
-
-        doc = {
-            "name": name,
-            "description": description,
-            "developer_instructions": body.strip(),
-        }
-        target.write_text(_toml.dumps(doc), encoding="utf-8")
+        _agent_writers.write_codex_agent(source, target)
 
     # ------------------------------------------------------------------
-    # Windsurf agent-skill transformer (agent.md -> skills/<name>/SKILL.md)
+    # Windsurf agent-skill transformer -- implementation in _agent_writers
     # ------------------------------------------------------------------
 
     def _write_windsurf_agent_skill(
@@ -302,67 +268,12 @@ class AgentIntegrator(BaseIntegrator):
     ) -> int:  # not @staticmethod: needs self.resolve_links()
         """Transform an ``.agent.md`` file to a Windsurf Skill (``SKILL.md``).
 
-        Windsurf Skills are the closest equivalent to a specialist persona:
-        - Invocable with ``@skill-name`` (like ``@agent-name`` in Copilot)
-        - Auto-invoked by Cascade when the description matches the task
-        - Support a directory with supplementary resource files
-
-        The conversion:
-        - Keeps ``name`` (or derives from filename) and ``description``.
-        - Strips agent-specific keys (``model``, ``tools``) and emits a
-          diagnostic warning when those fields are dropped.
-        - Preserves the markdown body verbatim.
+        Delegates to :func:`._agent_writers.write_windsurf_agent_skill`,
+        passing ``self.resolve_links`` as the link-resolution callback.
         """
-        if source.is_symlink():
-            raise ValueError(f"Refusing to read symlink source: {source}")
-        content = source.read_text(encoding="utf-8")
-
-        stem = source.name
-        if stem.endswith(".agent.md"):
-            stem = stem[:-9]
-        elif stem.endswith(".chatmode.md"):
-            stem = stem[:-12]
-        else:
-            stem = Path(stem).stem
-
-        fm_match = AgentIntegrator._FRONTMATTER_RE.match(content)
-        if fm_match:
-            body = content[fm_match.end() :]
-            try:
-                fm = yaml.safe_load(fm_match.group(1)) or {}
-            except Exception:
-                fm = {}
-        else:
-            body = content
-            fm = {}
-
-        dropped = [k for k in ("tools", "model") if fm.get(k)]
-        if dropped and diagnostics is not None:
-            diagnostics.warn(
-                f"Windsurf skill conversion dropped frontmatter field(s) "
-                f"{', '.join(dropped)} from {source.name}",
-                detail="Windsurf Skills do not support agent-only fields; "
-                "only name, description, and body are preserved.",
-            )
-
-        name = fm.get("name", stem)
-        description = fm.get("description", "")
-
-        # Use yaml.safe_dump to safely serialize values -- prevents YAML key
-        # injection via multi-line name/description strings.
-
-        fm_data: dict = {"name": name}
-        if description:
-            fm_data["description"] = description
-        fm_yaml = yaml.safe_dump(  # yaml-io-exempt: serializes to string, not file handle
-            fm_data, default_flow_style=False, allow_unicode=True
-        ).rstrip("\n")
-
-        result = f"---\n{fm_yaml}\n---\n" + body
-        result, links_resolved = self.resolve_links(result, source, target)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(result, encoding="utf-8")
-        return links_resolved
+        return _agent_writers.write_windsurf_agent_skill(
+            source, target, self.resolve_links, diagnostics=diagnostics
+        )
 
     # DEPRECATED: use integrate_agents_for_target(KNOWN_TARGETS["copilot"], ...) instead.
     def integrate_package_agents(
@@ -378,131 +289,15 @@ class AgentIntegrator(BaseIntegrator):
         Legacy entry point that preserves the multi-target auto-copy
         behaviour. New callers should use ``integrate_agents_for_target``
         directly.
+
+        Implementation delegates to
+        :func:`._agent_legacy.run_legacy_multi_target_integration`.
         """
-        from apm_cli.integration.targets import KNOWN_TARGETS
-
-        copilot = KNOWN_TARGETS["copilot"]
-
         self.init_link_resolver(package_info, project_root)
-        agent_files = self.find_agent_files(package_info.install_path)
-        if not agent_files:
+        if not self.find_agent_files(package_info.install_path):
             return IntegrationResult(0, 0, 0, [])
-
-        agents_dir = project_root / ".github" / "agents"
-        agents_dir.mkdir(parents=True, exist_ok=True)
-
-        claude_agents_dir = None
-        claude_dir = project_root / ".claude"
-        if claude_dir.exists() and claude_dir.is_dir():
-            claude_agents_dir = claude_dir / "agents"
-            claude_agents_dir.mkdir(parents=True, exist_ok=True)
-
-        cursor_agents_dir = None
-        cursor_dir = project_root / ".cursor"
-        if cursor_dir.exists() and cursor_dir.is_dir():
-            cursor_agents_dir = cursor_dir / "agents"
-            cursor_agents_dir.mkdir(parents=True, exist_ok=True)
-
-        files_integrated = 0
-        files_skipped = 0
-        files_adopted = 0
-        target_paths: list[Path] = []
-        total_links_resolved = 0
-
-        for source_file in agent_files:
-            target_filename = self.get_target_filename_for_target(
-                source_file,
-                package_info.package.name,
-                copilot,
-            )
-            target_path = agents_dir / target_filename
-            try:
-                ensure_path_within(target_path, agents_dir)
-            except PathTraversalError as exc:
-                if diagnostics is not None:
-                    diagnostics.warn(
-                        message=f"Rejected agent target path: {exc}",
-                        package=package_info.package.name,
-                    )
-                files_skipped += 1
-                continue
-            rel_path = portable_relpath(target_path, project_root)
-
-            if self.is_content_identical_to_source(target_path, source_file):
-                target_paths.append(target_path)
-                files_adopted += 1
-            else:
-                if self.check_collision(
-                    target_path, rel_path, managed_files, force, diagnostics=diagnostics
-                ):
-                    files_skipped += 1
-                    continue
-                links_resolved = self.copy_agent(source_file, target_path)
-                total_links_resolved += links_resolved
-                files_integrated += 1
-                target_paths.append(target_path)
-
-            if claude_agents_dir:
-                claude_target = KNOWN_TARGETS["claude"]
-                claude_filename = self.get_target_filename_for_target(
-                    source_file,
-                    package_info.package.name,
-                    claude_target,
-                )
-                claude_path = claude_agents_dir / claude_filename
-                try:
-                    ensure_path_within(claude_path, claude_agents_dir)
-                except PathTraversalError as exc:
-                    if diagnostics is not None:
-                        diagnostics.warn(
-                            message=f"Rejected claude agent target path: {exc}",
-                            package=package_info.package.name,
-                        )
-                    continue
-                claude_rel = portable_relpath(claude_path, project_root)
-                if self.is_content_identical_to_source(claude_path, source_file):
-                    target_paths.append(claude_path)
-                    files_adopted += 1
-                elif not self.check_collision(
-                    claude_path, claude_rel, managed_files, force, diagnostics=diagnostics
-                ):
-                    self.copy_agent(source_file, claude_path)
-                    target_paths.append(claude_path)
-
-            if cursor_agents_dir:
-                cursor_target = KNOWN_TARGETS["cursor"]
-                cursor_filename = self.get_target_filename_for_target(
-                    source_file,
-                    package_info.package.name,
-                    cursor_target,
-                )
-                cursor_path = cursor_agents_dir / cursor_filename
-                try:
-                    ensure_path_within(cursor_path, cursor_agents_dir)
-                except PathTraversalError as exc:
-                    if diagnostics is not None:
-                        diagnostics.warn(
-                            message=f"Rejected cursor agent target path: {exc}",
-                            package=package_info.package.name,
-                        )
-                    continue
-                cursor_rel = portable_relpath(cursor_path, project_root)
-                if self.is_content_identical_to_source(cursor_path, source_file):
-                    target_paths.append(cursor_path)
-                    files_adopted += 1
-                elif not self.check_collision(
-                    cursor_path, cursor_rel, managed_files, force, diagnostics=diagnostics
-                ):
-                    self.copy_agent(source_file, cursor_path)
-                    target_paths.append(cursor_path)
-
-        return IntegrationResult(
-            files_integrated=files_integrated,
-            files_updated=0,
-            files_skipped=files_skipped,
-            target_paths=target_paths,
-            links_resolved=total_links_resolved,
-            files_adopted=files_adopted,
+        return _agent_legacy.run_legacy_multi_target_integration(
+            self, package_info, project_root, force, managed_files, diagnostics
         )
 
     # DEPRECATED: use get_target_filename_for_target(KNOWN_TARGETS["claude"], ...) instead.

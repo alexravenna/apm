@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from apm_cli.core.null_logger import NullCommandLogger
 
 from .lockfile_finalize import _finalize_lockfile
+from .opts import MCPInstallOpts, _ResolveRuntimesOpts
 from .registry_split import _split_registry_self_defined
 from .runtime_install import RuntimeInstallContext, _install_registry_deps, _install_self_defined
 from .runtime_resolve import _resolve_runtimes
@@ -33,30 +34,20 @@ def _print_mcp_header(console, logger, dep_count: int) -> None:
         logger.progress(f"Installing MCP dependencies ({dep_count})...")
 
 
-def run_mcp_install(
-    mcp_deps: list,
-    runtime: str | None = None,
-    exclude: str | None = None,
-    verbose: bool = False,
-    apm_config: dict | None = None,
-    stored_mcp_configs: dict | None = None,
-    project_root=None,
-    user_scope: bool = False,
-    explicit_target: str | None = None,
-    logger=None,
-    diagnostics=None,
-    scope: InstallScope | None = None,
-) -> int:
+def run_mcp_install(mcp_deps: list, opts: MCPInstallOpts) -> int:
     """Install MCP dependencies."""
     from apm_cli.core.scope import InstallScope
     from apm_cli.integration.mcp_integrator import MCPIntegrator, _get_console, _is_vscode_available
 
+    logger = opts.logger
     if logger is None:
         logger = NullCommandLogger()
     if not mcp_deps:
         logger.warning("No MCP dependencies found in apm.yml")
         return 0
 
+    scope = opts.scope
+    user_scope = opts.user_scope
     if scope is InstallScope.USER:
         user_scope = True
     elif scope is InstallScope.PROJECT:
@@ -68,22 +59,24 @@ def run_mcp_install(
     console = _get_console()
     servers_to_update: builtins.set = builtins.set()
     successful_updates: builtins.set = builtins.set()
-    stored_mcp_configs = stored_mcp_configs or {}
+    stored_mcp_configs = opts.stored_mcp_configs or {}
 
     _print_mcp_header(console, logger, len(mcp_deps))
     target_runtimes, apm_config = _resolve_runtimes(
-        runtime=runtime,
-        exclude=exclude,
-        verbose=verbose,
-        apm_config=apm_config,
-        project_root=project_root,
-        user_scope=user_scope,
-        explicit_target=explicit_target,
-        scope=scope,
-        logger=logger,
-        console=console,
-        mcp_integrator_cls=MCPIntegrator,
-        is_vscode_available=_is_vscode_available,
+        _ResolveRuntimesOpts(
+            runtime=opts.runtime,
+            exclude=opts.exclude,
+            verbose=opts.verbose,
+            apm_config=opts.apm_config,
+            project_root=opts.project_root,
+            user_scope=user_scope,
+            explicit_target=opts.explicit_target,
+            scope=scope,
+            logger=logger,
+            console=console,
+            mcp_integrator_cls=MCPIntegrator,
+            is_vscode_available=_is_vscode_available,
+        )
     )
     if not target_runtimes:
         return 0
@@ -93,8 +86,8 @@ def run_mcp_install(
         target_runtimes=target_runtimes,
         console=console,
         logger=logger,
-        verbose=verbose,
-        project_root=project_root,
+        verbose=opts.verbose,
+        project_root=opts.project_root,
         user_scope=user_scope,
     )
     configured_count = _install_registry_deps(

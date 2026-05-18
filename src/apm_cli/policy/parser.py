@@ -55,6 +55,96 @@ class PolicyValidationError(Exception):
         super().__init__(f"Policy validation failed: {'; '.join(errors)}")
 
 
+def _validate_bool_field(data: dict, key: str, valid_set: set, errors: list[str]) -> None:
+    """Coerce a YAML boolean field to string and validate against valid_set."""
+    value = data.get(key)
+    if isinstance(value, bool):
+        value = _YAML_BOOL_COERCE.get(value, str(value))
+        data[key] = value
+    if value is not None and value not in valid_set:
+        errors.append(f"{key} must be one of {sorted(valid_set)}, got '{value}'")
+
+
+def _validate_cache_section(data: dict, errors: list[str]) -> None:
+    """Validate the cache.ttl field."""
+    cache = data.get("cache")
+    if not isinstance(cache, dict):
+        return
+    ttl = cache.get("ttl")
+    if ttl is None:
+        return
+    if not isinstance(ttl, int) or isinstance(ttl, bool):
+        errors.append(f"cache.ttl must be a positive integer, got '{ttl}'")
+    elif ttl <= 0:
+        errors.append(f"cache.ttl must be a positive integer, got {ttl}")
+
+
+def _validate_dependencies_section(data: dict, errors: list[str]) -> None:
+    """Validate the dependencies section fields."""
+    deps = data.get("dependencies")
+    if not isinstance(deps, dict):
+        return
+    rr = deps.get("require_resolution")
+    if rr is not None and rr not in _VALID_REQUIRE_RESOLUTION:
+        errors.append(
+            f"dependencies.require_resolution must be one of "
+            f"{sorted(_VALID_REQUIRE_RESOLUTION)}, got '{rr}'"
+        )
+    md = deps.get("max_depth")
+    if md is None:
+        return
+    if not isinstance(md, int) or isinstance(md, bool):
+        errors.append(f"dependencies.max_depth must be a positive integer, got '{md}'")
+    elif md <= 0:
+        errors.append(f"dependencies.max_depth must be a positive integer, got {md}")
+
+
+def _validate_mcp_section(data: dict, errors: list[str]) -> None:
+    """Validate the mcp section fields."""
+    mcp = data.get("mcp")
+    if not isinstance(mcp, dict):
+        return
+    sd = mcp.get("self_defined")
+    if sd is not None and sd not in _VALID_SELF_DEFINED:
+        errors.append(f"mcp.self_defined must be one of {sorted(_VALID_SELF_DEFINED)}, got '{sd}'")
+
+
+def _validate_manifest_section(data: dict, errors: list[str]) -> None:
+    """Validate the manifest section fields."""
+    manifest = data.get("manifest")
+    if not isinstance(manifest, dict):
+        return
+    scripts = manifest.get("scripts")
+    if scripts is not None and scripts not in _VALID_SCRIPTS:
+        errors.append(f"manifest.scripts must be one of {sorted(_VALID_SCRIPTS)}, got '{scripts}'")
+    rei = manifest.get("require_explicit_includes")
+    if rei is not None and not isinstance(rei, bool):
+        errors.append(f"manifest.require_explicit_includes must be a boolean, got '{rei}'")
+
+
+def _validate_unmanaged_files_section(data: dict, errors: list[str]) -> None:
+    """Validate the unmanaged_files section fields."""
+    uf = data.get("unmanaged_files")
+    if uf is None:
+        return
+    if not isinstance(uf, dict):
+        errors.append(
+            "unmanaged_files must be a YAML mapping "
+            f"(got {type(uf).__name__} {uf!r}); use a block, for example:\n"
+            "  unmanaged_files:\n"
+            "    action: deny\n"
+            "    directories:\n"
+            "      - .github/instructions"
+        )
+        return
+    action = uf.get("action")
+    if action is not None and action not in _VALID_UNMANAGED_ACTION:
+        errors.append(
+            f"unmanaged_files.action must be one of "
+            f"{sorted(_VALID_UNMANAGED_ACTION)}, got '{action}'"
+        )
+
+
 def validate_policy(data: dict) -> tuple[list[str], list[str]]:
     """Validate a raw dict against the policy schema.
 
@@ -72,92 +162,15 @@ def validate_policy(data: dict) -> tuple[list[str], list[str]]:
     for key in sorted(unknown):
         warnings.append(f"Unknown top-level policy key: '{key}'")
 
-    # enforcement (coerce YAML booleans: off → "off")
-    enforcement = data.get("enforcement")
-    if isinstance(enforcement, bool):
-        enforcement = _YAML_BOOL_COERCE.get(enforcement, str(enforcement))
-        data["enforcement"] = enforcement
-    if enforcement is not None and enforcement not in _VALID_ENFORCEMENT:
-        errors.append(
-            f"enforcement must be one of {sorted(_VALID_ENFORCEMENT)}, got '{enforcement}'"
-        )
-
+    _validate_bool_field(data, "enforcement", _VALID_ENFORCEMENT, errors)
     # fetch_failure (closes #829): controls fail-closed behavior on
     # policy fetch / parse failure. Default "warn" (back-compat).
-    fetch_failure = data.get("fetch_failure")
-    if isinstance(fetch_failure, bool):
-        fetch_failure = _YAML_BOOL_COERCE.get(fetch_failure, str(fetch_failure))
-        data["fetch_failure"] = fetch_failure
-    if fetch_failure is not None and fetch_failure not in _VALID_FETCH_FAILURE:
-        errors.append(
-            f"fetch_failure must be one of {sorted(_VALID_FETCH_FAILURE)}, got '{fetch_failure}'"
-        )
-
-    # cache.ttl
-    cache = data.get("cache")
-    if isinstance(cache, dict):
-        ttl = cache.get("ttl")
-        if ttl is not None:
-            if not isinstance(ttl, int) or isinstance(ttl, bool):
-                errors.append(f"cache.ttl must be a positive integer, got '{ttl}'")
-            elif ttl <= 0:
-                errors.append(f"cache.ttl must be a positive integer, got {ttl}")
-
-    # dependencies
-    deps = data.get("dependencies")
-    if isinstance(deps, dict):
-        rr = deps.get("require_resolution")
-        if rr is not None and rr not in _VALID_REQUIRE_RESOLUTION:
-            errors.append(
-                f"dependencies.require_resolution must be one of "
-                f"{sorted(_VALID_REQUIRE_RESOLUTION)}, got '{rr}'"
-            )
-        md = deps.get("max_depth")
-        if md is not None:
-            if not isinstance(md, int) or isinstance(md, bool):
-                errors.append(f"dependencies.max_depth must be a positive integer, got '{md}'")
-            elif md <= 0:
-                errors.append(f"dependencies.max_depth must be a positive integer, got {md}")
-
-    # mcp.self_defined
-    mcp = data.get("mcp")
-    if isinstance(mcp, dict):
-        sd = mcp.get("self_defined")
-        if sd is not None and sd not in _VALID_SELF_DEFINED:
-            errors.append(
-                f"mcp.self_defined must be one of {sorted(_VALID_SELF_DEFINED)}, got '{sd}'"
-            )
-
-    # manifest.scripts
-    manifest = data.get("manifest")
-    if isinstance(manifest, dict):
-        scripts = manifest.get("scripts")
-        if scripts is not None and scripts not in _VALID_SCRIPTS:
-            errors.append(
-                f"manifest.scripts must be one of {sorted(_VALID_SCRIPTS)}, got '{scripts}'"
-            )
-        rei = manifest.get("require_explicit_includes")
-        if rei is not None and not isinstance(rei, bool):
-            errors.append(f"manifest.require_explicit_includes must be a boolean, got '{rei}'")
-
-    # unmanaged_files
-    uf = data.get("unmanaged_files")
-    if uf is not None and not isinstance(uf, dict):
-        errors.append(
-            "unmanaged_files must be a YAML mapping "
-            f"(got {type(uf).__name__} {uf!r}); use a block, for example:\n"
-            "  unmanaged_files:\n"
-            "    action: deny\n"
-            "    directories:\n"
-            "      - .github/instructions"
-        )
-    elif isinstance(uf, dict):
-        action = uf.get("action")
-        if action is not None and action not in _VALID_UNMANAGED_ACTION:
-            errors.append(
-                f"unmanaged_files.action must be one of "
-                f"{sorted(_VALID_UNMANAGED_ACTION)}, got '{action}'"
-            )
+    _validate_bool_field(data, "fetch_failure", _VALID_FETCH_FAILURE, errors)
+    _validate_cache_section(data, errors)
+    _validate_dependencies_section(data, errors)
+    _validate_mcp_section(data, errors)
+    _validate_manifest_section(data, errors)
+    _validate_unmanaged_files_section(data, errors)
 
     return errors, warnings
 

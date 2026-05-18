@@ -126,16 +126,15 @@ ignore = [
 ]
 
 [tool.ruff.lint.pylint]
-# High initial thresholds set just above current codebase maximums.
-# Prevents new code from exceeding the worst existing violations.
-# Tighten these over time via dedicated refactoring PRs.
-max-statements = 120   # Stage 2 threshold
-max-args = 12          # Stage 2 threshold
-max-branches = 40      # Stage 2 threshold
-max-returns = 8        # Stage 2 threshold
+# Tightened thresholds for Stage 3 of strangler-fig refactor.
+# Tighten further in Stage 4.
+max-statements = 80    # Stage 3 threshold
+max-args = 8           # Stage 3 threshold
+max-branches = 25      # Stage 3 threshold
+max-returns = 6        # Stage 3 threshold
 
 [tool.ruff.lint.mccabe]
-max-complexity = 35    # Stage 2 threshold
+max-complexity = 20    # Stage 3 threshold
 
 [tool.ruff.lint.per-file-ignores]
 # Subprocess calls are intentional in a CLI tool
@@ -156,6 +155,7 @@ max-complexity = 35    # Stage 2 threshold
 "src/apm_cli/cache/integrity.py" = ["PLR0911"]
 "src/apm_cli/commands/audit.py" = ["F821", "S603", "S607", "PLR0913"]
 "src/apm_cli/commands/audit_content.py" = ["PLR0913"]
+"src/apm_cli/commands/audit_content/__init__.py" = ["PLR0913"]
 "src/apm_cli/commands/audit_sections.py" = ["PLR0913"]
 "src/apm_cli/commands/compile/cli.py" = ["PLR0911"]
 "src/apm_cli/commands/install/install_impl.py" = ["C901", "PLR0912", "PLR0915"]
@@ -169,12 +169,14 @@ max-complexity = 35    # Stage 2 threshold
 "src/apm_cli/deps/download_strategies/git_strategy.py" = ["C901", "PLR0912"]
 "src/apm_cli/deps/git_reference_resolver.py" = ["PLR0911"]
 "src/apm_cli/deps/github_downloader/download_package_ops.py" = ["C901", "PLR0912", "PLR0915"]
-"src/apm_cli/deps/plugin_parser.py" = ["C901"]
+"src/apm_cli/deps/github_downloader/_subdir_package_ops.py" = ["C901", "PLR0912", "PLR0915"]
+"src/apm_cli/deps/plugin_parser/_artifacts.py" = ["C901"]
 "src/apm_cli/install/phases/resolve/run.py" = ["C901", "PLR0915"]
 "src/apm_cli/install/phases/targets.py" = ["C901", "PLR0912", "PLR0915"]
 "src/apm_cli/install/pipeline.py" = ["F821", "S603", "S607", "C901", "PLR0912", "PLR0915"]
 "src/apm_cli/install/services/__init__.py" = ["PLR0913", "C901", "PLR0915"]
 "src/apm_cli/install/validation/__init__.py" = ["C901", "PLR0911", "PLR0915", "PLR0912"]
+"src/apm_cli/install/validation/_git_ls_remote.py" = ["C901", "PLR0915"]
 "src/apm_cli/integration/base_integrator.py" = ["PLR0911"]
 "src/apm_cli/integration/mcp_integrator/cleanup.py" = ["C901", "PLR0912", "PLR0915"]
 "src/apm_cli/integration/skill_integrator/naming.py" = ["PLR0911"]

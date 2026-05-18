@@ -77,6 +77,9 @@ from .identity import (
 )
 from .parsing import (
     _normalize_parent_repo_decl_path,
+    _parse_object_git_overrides,
+    _parse_object_local_path,
+    _parse_object_parent,
     _parse_ssh_protocol_url,
     _parse_ssh_url,
     _parse_standard_url,
@@ -104,7 +107,11 @@ from .virtual import (
     is_virtual_subdirectory,
     virtual_type,
 )
-from .virtual_detect import _detect_virtual_package, virtual_suffix_is_installable_shape
+from .virtual_detect import (
+    _compute_min_base_segments,
+    _detect_virtual_package,
+    virtual_suffix_is_installable_shape,
+)
 
 DependencyReference.virtual_type = virtual_type
 DependencyReference.is_virtual_file = is_virtual_file
@@ -123,6 +130,9 @@ DependencyReference.is_local_path = is_local_path
 DependencyReference.get_install_path = get_install_path
 DependencyReference._parse_ssh_protocol_url = _parse_ssh_protocol_url
 DependencyReference._normalize_parent_repo_decl_path = _normalize_parent_repo_decl_path
+DependencyReference._parse_object_local_path = _parse_object_local_path
+DependencyReference._parse_object_parent = _parse_object_parent
+DependencyReference._parse_object_git_overrides = _parse_object_git_overrides
 DependencyReference.parse_from_dict = parse_from_dict
 DependencyReference._parse_ssh_url = _parse_ssh_url
 DependencyReference._parse_standard_url = _parse_standard_url
@@ -135,6 +145,7 @@ DependencyReference.iter_gitlab_direct_shorthand_boundary_candidates = (
 DependencyReference.from_gitlab_shorthand_probe = from_gitlab_shorthand_probe
 DependencyReference._gitlab_shorthand_repo_segment_count = _gitlab_shorthand_repo_segment_count
 DependencyReference.virtual_suffix_is_installable_shape = virtual_suffix_is_installable_shape
+DependencyReference._compute_min_base_segments = _compute_min_base_segments
 DependencyReference._detect_virtual_package = _detect_virtual_package
 DependencyReference._resolve_virtual_shorthand_repo = _resolve_virtual_shorthand_repo
 DependencyReference._resolve_shorthand_to_parsed_url = _resolve_shorthand_to_parsed_url

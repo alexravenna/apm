@@ -117,6 +117,29 @@ def resilient_get(
     raise requests.exceptions.RequestException(f"All {max_retries} attempts failed for {url}")
 
 
+def _build_no_dep_ref_url(
+    host: str,
+    repo_ref: str,
+    use_ssh: bool,
+    is_insecure: bool,
+    is_github_family: bool,
+    effective_token: str | None,
+) -> str:
+    """Build clone URL for legacy callers that provide no dep_ref.
+
+    Constructs the URL directly from *host* and *repo_ref*, preserving
+    the behaviour of the original if/elif ladder.
+    """
+    port = None
+    if use_ssh:
+        return build_ssh_url(host, repo_ref, port=port)
+    if is_insecure:
+        return f"http://{host}/{repo_ref}.git"
+    if is_github_family and effective_token:
+        return build_https_clone_url(host, repo_ref, token=effective_token, port=port)
+    return build_https_clone_url(host, repo_ref, token=None, port=port)
+
+
 def build_repo_url(
     self,
     repo_ref: str,
@@ -202,14 +225,9 @@ def build_repo_url(
         # Legacy no-dep_ref callers: preserve historical behaviour.
         # Build URL directly from ``repo_ref`` + ``host`` since the
         # backends require a dep_ref to read host/port/etc.
-        port = None
-        if use_ssh:
-            return build_ssh_url(host, repo_ref, port=port)
-        if is_insecure:
-            return f"http://{host}/{repo_ref}.git"
-        if backend.is_github_family and effective_token:
-            return build_https_clone_url(host, repo_ref, token=effective_token, port=port)
-        return build_https_clone_url(host, repo_ref, token=None, port=port)
+        return _build_no_dep_ref_url(
+            host, repo_ref, use_ssh, is_insecure, backend.is_github_family, effective_token
+        )
 
     if use_ssh:
         return backend.build_clone_ssh_url(dep_ref)
