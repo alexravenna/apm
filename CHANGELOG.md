@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed direct GitHub API and ADO/GHES `git ls-remote` calls not respecting `PROXY_REGISTRY_ONLY` mode; all four validation code paths (virtual package, GitHub.com API, ADO/GHES git, and parse-failure fallback) now skip outbound network probes and return `True` when proxy-only mode is active. (#615)
 - Fixed Claude hook ownership metadata lost due to `additionalProperties` schema restriction: ownership is now stored in a `.claude/apm-hooks.json` sidecar file and re-injected on read, so APM can track which hooks it owns without violating the Claude settings schema. (#1279)
 - `apm pack` no longer prints a misleading `No plugin.json found` warning for marketplace-publishing projects (`marketplace:` block in `apm.yml`, no `dependencies:`); the synthesis path is the APM-native source of truth and is reported as an `[i]` info line when authoring a bare plugin, suppressed otherwise. (#1348)
 - `apm marketplace init` and `apm init --marketplace` now scaffold the snake-case `# tag_pattern: "{name}-v{version}"` per package instead of the schema-invalid camelCase `tagPattern` example. (#1348)
