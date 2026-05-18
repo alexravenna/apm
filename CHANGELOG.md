@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `apm compile --watch` now honors `targets: [claude, cursor]` (and every other multi-target / single-target configuration) on every recompile. Previously the watch path bypassed the resolver the one-shot path uses and let `CompilationConfig.from_apm_yml` fall back to the all-families default, silently regenerating `GEMINI.md` after every file edit. The watch path now resolves the effective target via the same helper the one-shot path uses and forwards it as `target=` into both the initial compile and every debounced recompile. (#1345)
 - Fixed hook commands using relative paths that break for Claude target (#1310)
 - Fixed target not propagating to intermediate CompilationConfig during compilation (#765)
 - Fixed direct GitHub API and ADO/GHES `git ls-remote` calls not respecting `PROXY_REGISTRY_ONLY` mode; all four validation code paths (virtual package, GitHub.com API, ADO/GHES git, and parse-failure fallback) now skip outbound network probes and return `True` when proxy-only mode is active. (#615)
