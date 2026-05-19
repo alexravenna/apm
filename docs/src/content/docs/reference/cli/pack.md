@@ -37,7 +37,9 @@ Bundles are target-agnostic. The consumer's project decides where files land at 
 | `--include-prerelease` | off | Marketplace: allow pre-release tags to satisfy version ranges. |
 | `-m`, `--marketplace FORMATS` | all configured | Comma-separated list of marketplace formats to build. Sentinels: `all` (every configured format), `none` (skip marketplace entirely). |
 | `--marketplace-path FORMAT=PATH` | manifest default | Override the output path for a specific format. Repeatable. Example: `--marketplace-path codex=./dist/codex.json`. |
-| `--json` | off | Emit machine-readable JSON to stdout. All logs move to stderr. Shape: `{ok, dry_run, warnings, errors, marketplace: {outputs: [...]}}`. |
+| `--json` | off | Emit machine-readable JSON to stdout. All logs move to stderr. Shape: `{ok, dry_run, warnings, errors, marketplace: {outputs: [...]}, version_alignment, drift}`. The `version_alignment` and `drift` keys are always present; they are `null` when the corresponding gate flag was not passed. |
+| `--check-versions` | off | Validate per-package versions against the `marketplace.versioning.strategy` declared in `apm.yml` (`lockstep`, `tag_pattern`, or `per_package`). On misalignment, prints a table of per-package status and exits `3`. Skips with an info note when `apm.yml` has no `marketplace:` block. Composes with `--dry-run` and `--json`. |
+| `--check-clean` | off | Regenerate `marketplace.json` into a temp directory and diff it against the committed copy. Exits `4` when any format has drifted. Never writes to the working tree. Composes with `--dry-run` and `--json`. |
 | `--marketplace-output PATH` | _(hidden)_ | **Deprecated.** Translates to `--marketplace-path claude=PATH` with a stderr warning. Will be removed in v0.15 (see #1318). |
 | `--legacy-skill-paths` | off | Bundle skills under per-client paths (e.g. `.cursor/skills/`) instead of the converged `.agents/skills/`. Compatibility flag. |
 | `--target`, `-t VALUE` | auto-detect | **Deprecated.** Recorded as informational `pack.target` metadata only; ignored by `apm install`. Will be removed in a future release. |
@@ -92,6 +94,29 @@ apm pack --dry-run
 apm pack --archive --dry-run -v
 ```
 
+### Release gates (CI)
+
+```bash
+# Validate version alignment against declared strategy (exits 3 on mismatch):
+apm pack --check-versions --dry-run
+
+# Confirm committed marketplace.json is not stale (exits 4 on drift):
+apm pack --check-clean
+
+# Run both gates together; structured output for CI step summary:
+apm pack --check-versions --check-clean --json
+```
+
+Configure the versioning strategy in `apm.yml`:
+
+```yaml
+marketplace:
+  versioning:
+    strategy: lockstep   # all packages must share the same version
+```
+
+Strategies: `lockstep` (default) -- all package versions match the top-level `version`; `tag_pattern` -- versions are checked against the `build.tagPattern`; `per_package` -- no cross-package version constraint (gate never fails).
+
 ## Output format
 
 ### Plugin bundle (`--format plugin`, default)
@@ -145,6 +170,8 @@ Configure marketplace artifact paths in `apm.yml`: `marketplace.claude.output` c
 | `0` | Success. Requested artifacts written (or, with `--dry-run`, planned). |
 | `1` | Build or runtime error: network failure, ref not found, no tag matches a marketplace range, lockfile read error, or unhandled packer exception. |
 | `2` | `apm.yml` schema validation error. |
+| `3` | `--check-versions` gate failed: at least one package version does not satisfy the declared `marketplace.versioning.strategy`. When both `--check-versions` and `--check-clean` fail, exit `3` takes precedence over `4`. |
+| `4` | `--check-clean` gate failed: the committed `marketplace.json` differs from what `apm pack` would generate now. Re-run `apm pack` and commit the updated artifact. |
 
 ## Related
 

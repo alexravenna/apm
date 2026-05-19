@@ -573,6 +573,7 @@ Overrides exist for the rare case where the published marketplace identity diffe
 | `output` | `string` | OPTIONAL | `.claude-plugin/marketplace.json` | Output path for the generated marketplace JSON. |
 | `metadata` | `object` | OPTIONAL | `{}` | Free-form metadata forwarded verbatim to `marketplace.json` (e.g. `homepage`, `support`). |
 | `build` | `Build` | OPTIONAL | `tagPattern: "v{version}"` | Build configuration for resolving package refs. See Section 7.4. |
+| `versioning` | `MarketplaceVersioning` | OPTIONAL | `{strategy: lockstep}` | Release-gate strategy for `apm pack --check-versions`. See Section 7.7. |
 | `packages` | `list<Package>` | OPTIONAL | `[]` | Packages exposed in the marketplace. See Section 7.5. |
 
 Unknown keys inside `marketplace:` are rejected at parse time.
@@ -657,6 +658,37 @@ marketplace:
 ```
 
 The legacy standalone `marketplace.yml` (top-level keys, no `marketplace:` wrapper) is still loadable but deprecated; new repositories SHOULD use the in-`apm.yml` form scaffolded by `apm marketplace init`.
+
+### 7.7. `marketplace.versioning`
+
+The OPTIONAL `versioning` block configures the release-gate strategy enforced by `apm pack --check-versions`. When omitted, the strategy defaults to `lockstep` when `--check-versions` is invoked.
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `strategy` | `enum` | REQUIRED | `lockstep` | One of `lockstep`, `tag_pattern`, or `per_package`. |
+
+Unknown keys are rejected at parse time.
+
+**Strategies:**
+
+| Strategy | Behaviour |
+|---|---|
+| `lockstep` | All packages listed under `marketplace.packages` MUST share the same `version` value as the top-level `version` field. The most common convention for monorepo marketplaces. |
+| `tag_pattern` | Versions are derived from the `build.tagPattern` template; cross-package version equality is not enforced. Suitable for semantic-release workflows where each package tags independently. |
+| `per_package` | No cross-package version constraint. The `--check-versions` gate always passes; the field documents intent without enforcement. |
+
+```yaml
+marketplace:
+  versioning:
+    strategy: lockstep
+  packages:
+    - name: auth
+      source: contoso/auth
+      version: "1.2.0"
+    - name: billing
+      source: contoso/billing
+      version: "1.2.0"   # must match for lockstep to pass
+```
 
 ---
 
