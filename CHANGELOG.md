@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Code quality**: enforced Ruff complexity thresholds via 4-stage strangler-fig decomposition -- cleared 744 violations (PLR0915/PLR0912/C901/PLR0913/PLR0911) and file-length cap without behavioural changes. Thresholds now at production targets (statements=50, branches=15, complexity=10, args=5, returns=6, file-length=400). (#1076)
+
 ### Fixed
 
 - `apm install` honors the SSH user portion of dependency URLs (`ssh://user@host/...` and scp shorthand `user@host:org/repo`) instead of hardcoding `git@`; unblocks EMU accounts and other non-`git` SSH identities. User values are validated against a strict allowlist before composing the clone URL. (#1385, closes #1383)

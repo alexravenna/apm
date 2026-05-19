@@ -78,3 +78,6 @@ scout-pipeline-result.png
 server.pid
 .docs-rewrite-plan/
 build/apm-*/
+
+# Codex runtime config (contains tokens)
+.codex/config.toml

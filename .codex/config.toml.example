@@ -1,0 +1,21 @@
+# Codex runtime configuration for APM development.
+# Copy this file to .codex/config.toml and fill in real values.
+# NEVER commit .codex/config.toml -- it is gitignored.
+
+model = "o4-mini"
+
+[env]
+GITHUB_PERSONAL_ACCESS_TOKEN = "YOUR_GITHUB_TOKEN_HERE"
+# Optional: Notion integration token for MCP server
+# NOTION_TOKEN = "YOUR_NOTION_TOKEN_HERE"
+# Optional: test token for local development
+# TEST_TOKEN = "YOUR_TEST_TOKEN_HERE"
+
+[[mcp_servers]]
+name = "github"
+# Pin by SHA digest for supply-chain integrity
+image = "ghcr.io/github/github-mcp-server"
+args = ["stdio"]
+
+[mcp_servers.env]
+GITHUB_PERSONAL_ACCESS_TOKEN = "YOUR_GITHUB_TOKEN_HERE"

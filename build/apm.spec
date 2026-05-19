@@ -163,6 +163,7 @@ hiddenimports = [
     'apm_cli.core.safe_installer',
     'apm_cli.core.token_manager',
     *collect_submodules('apm_cli.commands.install'),
+    *collect_submodules('apm_cli.install'),
     'apm_cli.commands.audit_content',
     'apm_cli.commands.audit_content.ci_gate',
     'apm_cli.commands.audit_content.content_scan',

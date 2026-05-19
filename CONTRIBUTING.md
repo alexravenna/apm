@@ -265,6 +265,28 @@ uv run --extra dev ruff format src/ tests/        # apply formatter
 
 The canonical lint contract (with common diagnostics and lifecycle binding for skills that claim green CI) lives in [`.apm/instructions/linting.instructions.md`](.apm/instructions/linting.instructions.md). Do not redefine these commands elsewhere -- honor that instruction.
 
+### Complexity thresholds and decomposition patterns
+
+CI enforces Ruff complexity thresholds (PLR0915 statements, PLR0912
+branches, C901 cyclomatic complexity, PLR0913 arguments, PLR0911
+returns) and a file-length cap (`MAX_LINES` in the lint workflow).
+When a function or file exceeds a threshold, decompose it using one of
+these patterns rather than adding `# noqa` suppression:
+
+| Pattern | When to use | Example |
+|---------|-------------|---------|
+| A. Extract-phases | A long function with sequential steps | `install()` -> `_validate()`, `_resolve()`, `_deploy()` |
+| B. Parameter object | Function has many arguments | Frozen `@dataclass` grouping related args |
+| C. Module split | File exceeds `MAX_LINES` | `github_downloader/` package with `__init__.py` re-exports |
+| D. Early-return consolidation | Many returns from nested branches | Guard clauses at top, single happy-path return |
+| E. Strategy dispatch | Complex branching on a type field | Dict/match mapping type to handler function |
+| F. Helper extraction | Repeated inline logic | Private `_helper()` in same module |
+| G. Subpackage promotion | Module grows multiple concerns | Promote `module.py` to `module/` package |
+
+The threshold table lives in `pyproject.toml` under
+`[tool.ruff.lint.pylint]`. The file-length cap is in
+`.github/workflows/ci.yml` (`MAX_LINES` variable).
+
 ### Optional: local pre-commit hooks
 
 For instant feedback before pushing, install the pre-commit hooks:
