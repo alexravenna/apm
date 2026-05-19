@@ -78,10 +78,22 @@ def uninstall(ctx, packages, dry_run, verbose, global_):
         apm_yml_path = manifest_path
         data, dump_yaml = _load_manifest_data(apm_yml_path, logger)
         current_deps = data["dependencies"]["apm"] or []
+
+        # Load lockfile early: used for marketplace ref resolution in
+        # _validate_uninstall_packages (Stage 1 offline lookup) and reused
+        # for MCP state capture and transitive orphan cleanup below.
+        lockfile_path, lockfile, pre_uninstall_mcp_servers = _load_lockfile_state(apm_dir)
+
+        from ...core.auth import AuthResolver
+
+        auth_resolver = None if dry_run else AuthResolver()
         packages_to_remove, packages_not_found = _validate_uninstall_packages(
             packages,
             current_deps,
             logger,
+            lockfile,
+            auth_resolver=auth_resolver,
+            dry_run=dry_run,
         )
         if not packages_to_remove:
             logger.warning("No packages found in apm.yml to remove")
@@ -102,7 +114,6 @@ def uninstall(ctx, packages, dry_run, verbose, global_):
                 logger=logger,
             ),
         )
-        lockfile_path, lockfile, pre_uninstall_mcp_servers = _load_lockfile_state(apm_dir)
         removed_from_modules = _remove_packages_from_disk(packages_to_remove, modules_dir, logger)
         orphan_removed, actual_orphans = _cleanup_transitive_orphans(
             lockfile,

@@ -99,10 +99,10 @@ def _build_next_steps(plugin: bool) -> list[str]:
         ]
 
     return [
-        "Install a skill:                apm install github/awesome-copilot/skills/documentation-writer",
-        "Install a marketplace plugin:   apm install frontend-web-dev@awesome-copilot",
-        "Install a versioned package:    apm install microsoft/apm-sample-package#v1.0.0",
-        "Author your own plugin:         apm pack",
+        "Install a package:               apm install <owner>/<repo>",
+        "Run a script:                    apm run <script>",
+        "Build a plugin? Scaffold one:    apm plugin init",
+        "Publishing a marketplace?:       apm marketplace init",
     ]
 
 

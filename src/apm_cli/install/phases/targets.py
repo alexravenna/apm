@@ -345,11 +345,14 @@ def run(ctx: InstallContext) -> None:
 
     # Legacy detect_target call -- return values are not consumed by any
     # downstream code but the call is preserved for behaviour parity with
-    # the pre-refactor mega-function.
+    # the pre-refactor mega-function.  Skip for multi-target (list) since
+    # detect_target only accepts a single-string target and the v2 resolver
+    # already handled multi-target upstream.
+    _legacy_config = config_target if isinstance(config_target, str) else None
     detect_target(
         project_root=ctx.project_root,
-        explicit_target=_explicit,
-        config_target=config_target,
+        explicit_target=_explicit if isinstance(_explicit, str) else None,
+        config_target=_legacy_config,
     )
 
     # ------------------------------------------------------------------

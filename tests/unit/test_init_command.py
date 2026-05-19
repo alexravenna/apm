@@ -341,9 +341,11 @@ class TestInitCommand:
                 result = self.runner.invoke(cli, ["init", "--yes"])
 
                 assert result.exit_code == 0
-                # New v5 panel content
+                # New v5 panel content -- noun-verb namespace hints
                 assert "apm install" in result.output
-                assert "apm pack" in result.output
+                assert "apm run" in result.output
+                assert "apm plugin init" in result.output
+                assert "apm marketplace init" in result.output
                 assert "https://microsoft.github.io/apm" in result.output
                 # Old dead-end content must be gone
                 assert "apm compile" not in result.output
