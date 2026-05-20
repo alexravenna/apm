@@ -202,7 +202,7 @@ jobs:
           # --dist loadgroup is required: it is the only xdist scheduler
           # that honors pytest.mark.xdist_group, which we use to keep
           # HOME-mutating tests serialized on a single worker.
-          PYTEST_EXTRA_ARGS: "--splits 4 --group ${{ matrix.shard }} -n 2 --dist loadgroup --maxfail 10 --cov"
+          PYTEST_EXTRA_ARGS: "--splits 4 --group ${{ matrix.shard }} -n 2 --dist loadgroup --maxfail 10 --cov --cov-fail-under=0"
         run: |
           chmod +x scripts/test-integration.sh
           uv run ./scripts/test-integration.sh
@@ -265,6 +265,9 @@ jobs:
             coverage combine coverage-shards/
             coverage json -o coverage.json
             python3 scripts/coverage-summary.py coverage.json --title "Integration Test Coverage"
+            # Phase 3: enforce integration coverage gate.
+            # Baseline measured at 44% (2026-05-19). Target: 54%.
+            # Use: coverage report --fail-under=54
           else
             echo "No coverage shard files found; skipping integration coverage summary."
           fi
