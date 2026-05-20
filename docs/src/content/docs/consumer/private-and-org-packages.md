@@ -146,6 +146,29 @@ dependencies:
 APM falls back across protocols on the same port: `ssh://host:7999`
 will retry as `https://host:7999/...` if SSH is unreachable.
 
+### Custom SSH user
+
+By default APM clones over SSH as `git`. To authenticate as a different
+SSH identity -- for example, an EMU account or a custom service
+account -- include the user directly in the `ssh://` URL:
+
+```yaml
+dependencies:
+  apm:
+    - git: ssh://meppiel-microsoft@github.com/acme/standards.git
+      ref: v1.2.0
+    - git: ssh://svc-account@bitbucket.acme.internal:7999/team/libs.git
+      ref: v1.2.0
+```
+
+The user portion is validated against a strict allowlist
+(`[a-zA-Z0-9_][a-zA-Z0-9_.+-]*`, max 64 characters) before the SSH URL
+is composed. Leading dashes and percent-encoded userinfo are rejected.
+
+> **Azure DevOps exception:** ADO always requires the literal `git` user
+> (`git@ssh.dev.azure.com`). A custom SSH user in an ADO dependency URL
+> is ignored and `git` is used regardless.
+
 ## Bitbucket Data Center personal repos
 
 Bitbucket Data Center / Server exposes personal repositories under

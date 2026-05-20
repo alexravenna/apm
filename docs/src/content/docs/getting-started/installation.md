@@ -252,6 +252,40 @@ $env:APM_DEBUG = "1"
 apm install <package>
 ```
 
+### apm.exe flagged as a virus or potentially unwanted software (Windows Defender / antivirus)
+
+If the installer (or `apm self-update`) fails at the `Testing binary...` step with a message like:
+
+```
+Program 'apm.exe' failed to run: Operation did not complete successfully because
+the file contains a virus or potentially unwanted software
+```
+
+Windows Defender (or another real-time antivirus) is blocking the unsigned PyInstaller binary. HRESULT `0x800700E1` and `0x800704EC` both indicate this class of block.
+
+**Option 1 -- Add a Defender exclusion (elevated PowerShell):**
+
+```powershell
+# Run as administrator
+Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\Programs\apm"
+```
+
+This tells Defender to skip scanning files under the APM install root. Re-run the installer after adding the exclusion.
+
+**Option 2 -- Install via pip (avoids the binary entirely):**
+
+```powershell
+pip install --user apm-cli
+```
+
+This installs the pure-Python `apm` command from PyPI instead of the standalone binary. Requires Python 3.10+.
+
+**Option 3 -- Report a false positive to Microsoft:**
+
+If you believe this is an incorrect detection, submit `apm.exe` to the [Microsoft Security Intelligence portal](https://www.microsoft.com/en-us/wdsi/filesubmission) as a false positive. Binary signing is tracked as a separate roadmap item.
+
+> **Note:** This is a distinct error class from the AppLocker / WDAC `Access is denied` block below. The two must not be confused: HRESULT `0x800700E1` is an antivirus block; HRESULT `0x80070005` is an application-control policy block.
+
 ### `Access is denied` running apm.exe on Windows (AppLocker / App Control for Business)
 
 If the installer (or `apm self-update`) fails at the `Testing binary...` step with `Access is denied` / HRESULT `0x80070005`, an enterprise application control policy ([AppLocker](https://learn.microsoft.com/en-us/windows/security/application-security/application-control/app-control-for-business/applocker/applocker-overview) or [App Control for Business / WDAC](https://learn.microsoft.com/en-us/windows/security/application-security/application-control/app-control-for-business/)) is blocking execution of `apm.exe` from a user-writable path.
