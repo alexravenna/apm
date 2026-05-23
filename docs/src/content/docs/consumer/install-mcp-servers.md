@@ -29,20 +29,35 @@ dependencies:
     # 1. Registry reference (bare string)
     - io.github.github/github-mcp-server
 
-    # 2. Self-defined stdio (local process)
+    # 2. Registry reference with a per-dep custom registry URL
+    - name: my-internal-server
+      registry: https://registry.internal.example.com
+
+    # 3. Self-defined stdio (local process)
     - name: filesystem
       registry: false
       transport: stdio
       command: npx
       args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
 
-    # 3. Self-defined remote (HTTP / SSE)
+    # 4. Self-defined remote (HTTP / SSE)
     - name: linear
       registry: false
       transport: http
       url: https://mcp.linear.app/sse
       headers:
         Authorization: "Bearer ${LINEAR_TOKEN}"
+```
+
+When `registry:` is a string URL (form 2 above), APM routes that entry through
+the specified registry instead of the global default (`https://api.mcp.github.com`).
+Each dependency can point to a different registry; APM groups them and installs
+each group via its own registry client. The `registry:` URL is persisted to
+`apm.yml` and honored on every subsequent `apm install`. You can also set the
+custom URL from the CLI with `--registry URL` when first adding the entry:
+
+```bash
+apm install --mcp my-internal-server --registry https://registry.internal.example.com
 ```
 
 The full grammar (overlays, `${input:...}` variables, `tools:`

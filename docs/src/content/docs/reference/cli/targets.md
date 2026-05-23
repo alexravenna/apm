@@ -92,7 +92,7 @@ match per target is enough to activate it.
 | Target | Signal(s) APM looks for | Deploy directory |
 |--------|-------------------------|------------------|
 | `claude` | `.claude/` directory, or `CLAUDE.md` file | `.claude/` |
-| `copilot` | `.github/copilot-instructions.md` file | `.github/` |
+| `copilot` | `.github/copilot-instructions.md` file (monolithic), or `.github/instructions/`, `.github/agents/`, `.github/prompts/`, `.github/hooks/` directories (file-based layout) | `.github/` |
 | `cursor` | `.cursor/` directory, or `.cursorrules` file (legacy) | `.cursor/` |
 | `codex` | `.codex/` directory | `.codex/` |
 | `gemini` | `.gemini/` directory, or `GEMINI.md` file | `.gemini/` |
@@ -104,6 +104,10 @@ Notes:
 
 - Detection is filesystem-only. APM does not inspect file contents to
   decide whether a marker is "real".
+- Copilot is detected by either the monolithic `.github/copilot-instructions.md`
+  file OR by the presence of any file-based layout directory
+  (`.github/instructions/`, `.github/agents/`, `.github/prompts/`,
+  `.github/hooks/`). Any one of these is sufficient.
 - A `CLAUDE.md` written as documentation will still activate the
   `claude` target. Pin `targets:` in `apm.yml` to override.
 - If no signals are found and `apm.yml` declares no `targets:`,

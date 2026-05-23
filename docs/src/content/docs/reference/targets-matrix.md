@@ -54,7 +54,7 @@ list before `compile` or `install`.
 | Target   | Signals (any one activates the target)        |
 |----------|-----------------------------------------------|
 | claude   | `.claude/` directory, or `CLAUDE.md` file     |
-| copilot  | `.github/copilot-instructions.md` file        |
+| copilot  | `.github/copilot-instructions.md` file, or `.github/instructions/`, `.github/agents/`, `.github/prompts/`, `.github/hooks/` directories |
 | cursor   | `.cursor/` directory, or `.cursorrules` file  |
 | codex    | `.codex/` directory                           |
 | gemini   | `.gemini/` directory, or `GEMINI.md` file     |
@@ -70,7 +70,7 @@ a project's `apm.yml` `targets:` field so contributors running plain
 
 GitHub Copilot (CLI and IDE).
 
-- **Detection.** `.github/copilot-instructions.md`.
+- **Detection.** `.github/copilot-instructions.md` (monolithic), or any of `.github/instructions/`, `.github/agents/`, `.github/prompts/`, `.github/hooks/` directories (file-based layout).
 - **Deploy directory.** `.github/` at project scope; `~/.copilot/` at user scope.
 - **Supported primitives.** instructions, prompts, agents, skills, hooks, mcp.
 - **File conventions.**
