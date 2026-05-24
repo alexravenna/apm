@@ -141,6 +141,16 @@ MCP defines two transport families. APM exposes both:
   and `file://` are rejected). Use `--header KEY=VALUE` (repeatable)
   for HTTP headers such as `Authorization`.
 
+### Docker-based registry servers and workspace variables
+
+Some registry-resolved MCP servers run inside Docker containers and
+declare `{workspaceFolder}` in their runtime arguments to mount your
+project into the container. APM substitutes the current project root
+for `{workspaceFolder}` when writing the runtime config, so Docker
+volume mounts like `-v {workspaceFolder}:/workspace` resolve correctly
+across all supported harnesses: Copilot CLI, Codex, Cursor, Claude,
+Gemini, Windsurf, and OpenCode. (#1461)
+
 `--transport` is inferred when omitted: a `--url` implies a remote
 transport, a post-`--` command implies `stdio`. The mutually-exclusive
 combinations (`--url` plus stdio command, `--header` without `--url`,
