@@ -64,8 +64,8 @@ Multiple globs are supported via comma-separation:
 applyTo: "**/src/**,**/api/**,**/services/**"
 ```
 
-Targets that use YAML lists (claude, cursor, windsurf) expand the
-comma-separated value into a proper list automatically. Brace
+When compiling for claude, cursor, and windsurf, APM expands the
+comma-separated value into a proper YAML list. Brace
 alternations like `**/*.{css,scss}` are treated as a single glob and
 are not split.
 
