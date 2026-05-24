@@ -82,7 +82,7 @@ def _parse_path_overrides(
 ) -> "dict[str, str] | None":
     """Parse --marketplace-path KEY=VALUE pairs.
 
-    Returns a dict mapping format name → path, or ``None`` on the first
+    Returns a dict mapping format name -> path, or ``None`` on the first
     validation error (after emitting the error via *ctx*).
     """
     from ..marketplace.output_profiles import known_output_names
@@ -122,11 +122,10 @@ def _parse_marketplace_filter(
     """Parse the --marketplace filter value.
 
     Returns:
-      - ``None``           → build all configured outputs
-      - empty ``tuple``    → skip marketplace entirely (``--marketplace none``)
-      - non-empty tuple    → build only the named formats
-      - string sentinel ``"__error__"`` on validation error – callers should
-        check ``isinstance(result, str)``.
+      - ``None``           -- build all configured outputs
+      - empty ``tuple``    -- skip marketplace entirely (``--marketplace none``)
+      - non-empty tuple    -- build only the named formats
+      - ``None`` on validation error (after emitting the error via *ctx*)
     """
     from ..marketplace.output_profiles import known_output_names
 
@@ -145,7 +144,7 @@ def _parse_marketplace_filter(
                 f"Known formats: {', '.join(sorted(known))}"
             )
             _emit_json_error_or_raise(ctx, json_output, "unknown_format", msg)
-            return "__error__"  # type: ignore[return-value]
+            return None
     return tuple(requested)
 
 
@@ -266,7 +265,7 @@ def _parse_marketplace_filter(
     ),
 )
 @click.pass_context
-def pack_cmd(
+def pack_cmd(  # noqa: PLR0913 -- Click handler, one param per CLI option
     ctx,
     fmt,
     target,
@@ -292,7 +291,7 @@ def pack_cmd(
 
     logger = CommandLogger("pack", verbose=verbose, dry_run=dry_run)
 
-    # -- Deprecation: --marketplace-output → --marketplace-path claude=PATH --
+    # -- Deprecation: --marketplace-output -> --marketplace-path claude=PATH --
     if marketplace_output is not None:
         translated = f"--marketplace-path claude={marketplace_output}"
         click.echo(
@@ -314,8 +313,7 @@ def pack_cmd(
 
     # -- Parse --marketplace filter --
     marketplace_formats = _parse_marketplace_filter(marketplace_filter, ctx, json_output)
-    if isinstance(marketplace_formats, str):  # "__error__" sentinel
-        return
+    # _parse_marketplace_filter raises/exits on error via _emit_json_error_or_raise
     project_root = Path(".").resolve()
     # Issue #1207 D1: when --target is not given, detect the project's
     # actual target so the embedded ``pack.target`` reflects what was

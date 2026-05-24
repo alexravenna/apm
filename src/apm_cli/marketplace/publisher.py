@@ -36,7 +36,10 @@ from dataclasses import dataclass, field  # noqa: F401
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional  # noqa: F401
+from typing import TYPE_CHECKING, Any, Optional  # noqa: F401
+
+if TYPE_CHECKING:
+    from .semver import SemVer
 
 import yaml
 
@@ -594,7 +597,7 @@ class MarketplacePublisher:
         matches: list[tuple[int, str, str | None, str]],
         target: ConsumerTarget,
         plan: PublishPlan,
-        new_sv: object,
+        new_sv: SemVer | None,
     ) -> TargetResult | None:
         """Check ref-change and downgrade guards. Returns error result or None."""
         new_ref = plan.new_ref

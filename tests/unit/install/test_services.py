@@ -72,6 +72,30 @@ def _make_copilot_app_target(app_root: Path) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# IntegratorBundle frozen contract
+# ---------------------------------------------------------------------------
+
+
+class TestIntegratorBundleFrozen:
+    """IntegratorBundle must be immutable (frozen=True contract)."""
+
+    def test_cannot_mutate_field(self) -> None:
+        from dataclasses import FrozenInstanceError
+        from unittest.mock import MagicMock
+
+        bundle = IntegratorBundle(
+            prompt=MagicMock(),
+            agent=MagicMock(),
+            skill=MagicMock(),
+            instruction=MagicMock(),
+            command=MagicMock(),
+            hook=MagicMock(),
+        )
+        with pytest.raises(FrozenInstanceError):
+            bundle.prompt = MagicMock()  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
 # TestDeployedPathEntry
 # ---------------------------------------------------------------------------
 

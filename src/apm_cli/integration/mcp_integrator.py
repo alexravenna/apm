@@ -103,6 +103,8 @@ def _clean_toml_mcp_config(
     config_path: Path,
     stale_names: builtins.set,
     label: str,
+    logger=None,
+    use_rich: bool = True,
 ) -> int:
     """Remove stale entries from a TOML-based MCP config file.
 
@@ -110,6 +112,10 @@ def _clean_toml_mcp_config(
         config_path: Path to the TOML config file.
         stale_names: Set of server names to remove (expanded form).
         label: Human-readable config label used in log messages.
+        logger: Optional command logger for progress messages. When provided
+            and *use_rich* is False, removal notices use ``logger.progress``.
+        use_rich: When True (default), emit removal notices via ``_rich_success``;
+            otherwise use ``logger.progress``.
 
     Returns:
         Number of entries removed.
@@ -127,7 +133,11 @@ def _clean_toml_mcp_config(
         if removed:
             config_path.write_text(_toml.dumps(config), encoding="utf-8")
             for name in removed:
-                _rich_success(f"Removed stale MCP server '{name}' from {label}", symbol="check")
+                msg = f"Removed stale MCP server '{name}' from {label}"
+                if use_rich:
+                    _rich_success(msg, symbol="check")
+                elif logger is not None:
+                    logger.progress(msg)
         return len(removed)
     except Exception:
         _log.debug("Failed to clean stale MCP servers from %s", label, exc_info=True)

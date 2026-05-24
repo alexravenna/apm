@@ -96,13 +96,16 @@ ignore = [
 # High initial thresholds set just above current codebase maximums.
 # Prevents new code from exceeding the worst existing violations.
 # Tighten these over time via dedicated refactoring PRs.
+# Stage 1 thresholds (PR #1464, issue #1077).
+# Roadmap: Stage 2 targets max-complexity<=20, max-branches<=25 (McCabe standard).
 max-statements = 200   # Stage 1 (was 275)
 max-args = 15          # Stage 1 (was 18)
 max-branches = 60      # Stage 1 (was 115)
 max-returns = 12       # Stage 1 (was 18)
 
 [tool.ruff.lint.mccabe]
-max-complexity = 50    # Stage 1 (was 100)
+# Stage 1 (was 100). Stage 2 target: <=20 (McCabe industry standard).
+max-complexity = 50
 
 [tool.ruff.lint.per-file-ignores]
 # Subprocess calls are intentional in a CLI tool
@@ -120,11 +123,6 @@ max-complexity = 50    # Stage 1 (was 100)
 "src/apm_cli/commands/init.py" = ["F821", "S603", "S607"]
 "src/apm_cli/install/pipeline.py" = ["F821", "S603", "S607"]
 "src/apm_cli/integration/skill_integrator.py" = ["F821", "S603", "S607"]
-# Click command handlers legitimately require one parameter per declared CLI option.
-# pack_cmd has 17 args (all Click options); PLR0913 is suppressed here rather than
-# inline so the codebase default max-args threshold remains accurate.
-"src/apm_cli/commands/pack.py" = ["PLR0913"]
-
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"

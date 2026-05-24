@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from ..core.command_logger import InstallLogger
     from ..core.scope import InstallScope
     from ..install.context import InstallContext
+    from ..integration.base_integrator import BaseIntegrator
     from ..utils.diagnostics import DiagnosticCollector
 
 
@@ -48,12 +49,12 @@ class IntegratorBundle:
     keeping the integrator objects strongly typed and discoverable.
     """
 
-    prompt: Any
-    agent: Any
-    skill: Any
-    instruction: Any
-    command: Any
-    hook: Any
+    prompt: BaseIntegrator
+    agent: BaseIntegrator
+    skill: BaseIntegrator
+    instruction: BaseIntegrator
+    command: BaseIntegrator
+    hook: BaseIntegrator
 
 
 def _deployed_path_entry(

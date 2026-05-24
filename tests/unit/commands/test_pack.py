@@ -175,10 +175,12 @@ class TestParseMarketplaceFilter:
         result = _parse_marketplace_filter(" claude , codex ", ctx, json_output=False)
         assert result == ("claude", "codex")
 
-    def test_unknown_format_returns_error_sentinel(self) -> None:
+    def test_unknown_format_exits_with_error(self) -> None:
         ctx = _make_ctx(json_output=True)
         result = _parse_marketplace_filter("unknown_format", ctx, json_output=True)
-        assert isinstance(result, str)  # "__error__" sentinel
+        # With json_output=True, ctx.exit(1) is called and function returns None
+        assert result is None
+        assert ctx._exited == [1]
 
 
 def test_marketplace_fallback_renders_warnings_and_package_count() -> None:
