@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `apm marketplace add` now accepts local filesystem paths, `file://` URIs, SSH URLs, and HTTPS URLs to any git host (Azure DevOps via `ADO_APM_PAT`, GitLab, Gitea, Bitbucket Server, self-hosted). Generic-git registrations fetch `marketplace.json` via `GitCache` and never forward APM tokens; local marketplaces read the manifest directly. `apm install <plugin>@<local-marketplace>` is fully supported, including marketplaces whose `marketplace.json` uses relative plugin sources.
+
+### Security
+
+- `GitCache` now disables git hooks (`core.hooksPath=/dev/null`) and skips submodule recursion on every clone, fetch, and checkout. Hardens APM against malicious upstreams, which is on-path for the new generic-git marketplace support.
+
 ### Fixed
 
 - `apm install` now re-resolves a dependency when its ref pin is changed in `apm.yml`; previously the locked commit always won, silently ignoring the edit -- by @sergio-sisternes-epam (#1473)
