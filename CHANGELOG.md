@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `apm pack --create-tag` (optionally with `--push`) materialises -- and pushes -- the release git tag(s) on a clean tree after the existing `--check-versions` gate succeeds, collapsing the bump/tag/push handshake into one command. Tag names derive from `marketplace.versioning`: `single_version` yields one `v<version>` tag (or your `tag_pattern`), `per_package` yields one tag per package (`<name>-v<version>`). `--push` requires `--create-tag` and uses explicit refspecs (`refs/tags/<name>:refs/tags/<name>`), never `--tags`. Refusals are first-class: `dirty_tree`, `tag_exists`, `version_mismatch`, `no_remote`, `push_without_tag`, `no_check_versions`, `no_marketplace`, `git_failure` surface as `tag_creation.refusal_code` in the `--json` envelope and exit `1` (the existing version-gate exit `3` and drift-gate exit `4` are unchanged). `--dry-run` previews tag names and push targets without touching git. (#1489)
+
 ## [0.15.0] - 2026-05-27
 
 ### Security

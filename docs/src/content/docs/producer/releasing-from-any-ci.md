@@ -53,6 +53,36 @@ Authenticate `gh` with a token that has `contents: write` on the
 repo. Substitute the equivalent verb for non-GitHub forges
 (`glab release create`, `az repos`, REST upload).
 
+## One-shot tagging from a clean tree
+
+When you have already committed the version bump and want the CLI
+to materialise (and optionally push) the release tag for you, add
+`--create-tag` and, if you also want it on `origin`, `--push`:
+
+```bash
+apm pack --check-versions --create-tag --push
+```
+
+The block runs only after `--check-versions` succeeds, so a version
+mismatch still exits `3` and never produces a tag. `--push` requires
+`--create-tag`. The tag name is derived from `marketplace.versioning`:
+
+- `single_version` -> one tag, `v<version>` (or your `tag_pattern`).
+- `per_package`    -> one tag per package, e.g. `<name>-v<version>`.
+
+`--dry-run` previews exactly which tags would be created and pushed
+without touching git. Refusals are stable JSON contract codes
+(`dirty_tree`, `tag_exists`, `version_mismatch`, `no_remote`,
+`push_without_tag`, `no_check_versions`, `no_marketplace`,
+`git_failure`) emitted under `tag_creation.refusal_code` and exit
+with code `1`. The existing version-gate (exit `3`) and drift-gate
+(exit `4`) codes are unchanged.
+
+This is intended for local one-shot releases; CI pipelines should
+continue to drive tagging through `gh release create` or the
+equivalent forge primitive shown above.
+
+
 ## GitHub Actions
 
 ```yaml

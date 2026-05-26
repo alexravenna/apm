@@ -53,7 +53,7 @@ Examples:
 
 Exit codes:
   0  Success
-  1  Build or runtime error
+  1  Build or runtime error (includes --create-tag / --push refusals)
   2  Manifest schema validation error
   3  Version alignment check failed (--check-versions)
   4  Marketplace working-tree drift detected (--check-clean)
@@ -191,6 +191,29 @@ def _emit_json_error_or_raise(ctx, json_output: bool, code: str, message: str):
         "need per-client skill layouts."
     ),
 )
+@click.option(
+    "--create-tag",
+    "create_tag",
+    is_flag=True,
+    default=False,
+    help=(
+        "Release gate: after --check-versions succeeds, create the git tag(s) "
+        "implied by the marketplace versioning strategy (lockstep / tag_pattern / "
+        "per_package). Refuses on dirty tree, existing tags, or version mismatch. "
+        "Requires --check-versions. Honors --dry-run."
+    ),
+)
+@click.option(
+    "--push",
+    "push_tag",
+    is_flag=True,
+    default=False,
+    help=(
+        "After --create-tag succeeds, push the newly created tag(s) to the "
+        "'origin' remote by explicit refspec (never 'git push --tags'). "
+        "Requires --create-tag. Honors --dry-run."
+    ),
+)
 @click.pass_context
 def pack_cmd(
     ctx,
@@ -210,6 +233,8 @@ def pack_cmd(
     legacy_skill_paths,
     check_versions,
     check_clean,
+    create_tag,
+    push_tag,
 ):
     """Pack APM artifacts: bundle and/or marketplace.json."""
     from ..marketplace.output_profiles import known_output_names
@@ -330,8 +355,9 @@ def pack_cmd(
     gate_errors: list[dict] = []
     version_gate_failed = False
     drift_gate_failed = False
+    gate_config = None  # shared with the tagging block below
 
-    if check_versions or check_clean:
+    if check_versions or check_clean or create_tag or push_tag:
         from ..marketplace.builder import BuildOptions as MktBuildOptions
         from ..marketplace.builder import MarketplaceBuilder
         from ..marketplace.drift_check import check_marketplace_drift, render_diff_lines
@@ -343,7 +369,6 @@ def pack_cmd(
         from ..marketplace.yml_schema import MarketplaceYmlError
 
         # Try to load the marketplace config; if absent, skip both gates with [i].
-        gate_config = None
         try:
             source = detect_config_source(project_root)
             if source != ConfigSource.NONE:
@@ -436,6 +461,25 @@ def pack_cmd(
                     for msg in d_report.error_messages():
                         gate_errors.append({"code": "marketplace_drift", "message": msg})
 
+    # -- Tagging block (--create-tag / --push) --
+    tag_creation_payload: dict | None = None
+    tag_push_payload: dict | None = None
+    tag_refusal = False
+
+    if create_tag or push_tag:
+        tag_creation_payload, tag_push_payload, tag_refusal = _run_tagging(
+            logger=logger,
+            json_output=json_output,
+            project_root=project_root,
+            dry_run=dry_run,
+            check_versions=check_versions,
+            create_tag=create_tag,
+            push_tag=push_tag,
+            gate_config=gate_config,
+            version_gate_failed=version_gate_failed,
+            drift_gate_failed=drift_gate_failed,
+        )
+
     # -- JSON output mode: consistent envelope --
     if json_output:
         envelope = {
@@ -447,6 +491,8 @@ def pack_cmd(
             "bundle": None,
             "version_alignment": version_alignment_payload,
             "drift": drift_payload,
+            "tag_creation": tag_creation_payload,
+            "tag_push": tag_push_payload,
         }
         for sub in result.producer_results:
             if sub.kind is OutputKind.MARKETPLACE and sub.payload is not None:
@@ -457,11 +503,22 @@ def pack_cmd(
         if gate_errors:
             envelope["errors"] = list(envelope["errors"]) + gate_errors
             envelope["ok"] = False
+        if tag_refusal and tag_creation_payload is not None:
+            envelope["ok"] = False
+            envelope["errors"] = [
+                *envelope["errors"],
+                {
+                    "code": tag_creation_payload.get("refusal_code", "tag_refused"),
+                    "message": tag_creation_payload.get("message", "tag refusal"),
+                },
+            ]
         click.echo(json_mod.dumps(envelope, indent=2))
         if version_gate_failed:
             ctx.exit(3)
         if drift_gate_failed:
             ctx.exit(4)
+        if tag_refusal:
+            ctx.exit(1)
         return
 
     for sub in result.producer_results:
@@ -470,11 +527,163 @@ def pack_cmd(
         elif sub.kind is OutputKind.MARKETPLACE:
             _render_marketplace_result(logger, sub.payload, dry_run, sub.warnings, sub.outputs)
 
-    # Gate exit codes (after non-JSON rendering above): 3 wins over 4.
+    # Gate exit codes (after non-JSON rendering above): 3 wins over 4, then tag refusal (1).
     if version_gate_failed:
         ctx.exit(3)
     if drift_gate_failed:
         ctx.exit(4)
+    if tag_refusal:
+        ctx.exit(1)
+
+
+def _run_tagging(
+    *,
+    logger,
+    json_output: bool,
+    project_root: Path,
+    dry_run: bool,
+    check_versions: bool,
+    create_tag: bool,
+    push_tag: bool,
+    gate_config,
+    version_gate_failed: bool,
+    drift_gate_failed: bool,
+):
+    """Execute the --create-tag/--push flow.
+
+    Returns ``(tag_creation_payload, tag_push_payload, tag_refusal)``.
+    A non-None ``tag_creation_payload`` indicates the block ran at all;
+    ``tag_refusal`` is True when any refusal/failure should drive exit 1.
+    """
+    from ..marketplace.version_check import _is_local_package
+    from ..release import GitTagger, TaggingRefusal
+    from ..release.git_tagger import (
+        REFUSAL_NO_CHECK_VERSIONS,
+        REFUSAL_NO_MARKETPLACE,
+        REFUSAL_PUSH_WITHOUT_TAG,
+    )
+
+    if not check_versions:
+        message = "--create-tag and --push require --check-versions."
+        if not json_output:
+            logger.error(message)
+        return (
+            {
+                "status": "refused",
+                "created": [],
+                "refusal_code": REFUSAL_NO_CHECK_VERSIONS,
+                "message": message,
+            },
+            None,
+            True,
+        )
+    if push_tag and not create_tag:
+        message = "--push requires --create-tag; there is nothing to push."
+        if not json_output:
+            logger.error(message)
+        return (
+            {
+                "status": "refused",
+                "created": [],
+                "refusal_code": REFUSAL_PUSH_WITHOUT_TAG,
+                "message": message,
+            },
+            None,
+            True,
+        )
+    if version_gate_failed or drift_gate_failed:
+        # Existing gate exit codes (3/4) take precedence; do not run tagging.
+        return None, None, False
+    if gate_config is None:
+        message = (
+            "--create-tag requires a marketplace block in apm.yml; bundle-only "
+            "mode has no single version source."
+        )
+        if not json_output:
+            logger.error(message)
+        return (
+            {
+                "status": "refused",
+                "created": [],
+                "refusal_code": REFUSAL_NO_MARKETPLACE,
+                "message": message,
+            },
+            None,
+            True,
+        )
+
+    tagger = GitTagger(project_root, dry_run=dry_run, logger=logger)
+    try:
+        plans = tagger.plan_tags(
+            strategy=gate_config.versioning.strategy,
+            marketplace_version=gate_config.version,
+            packages=[
+                {"name": e.name, "version": e.version, "tag_pattern": e.tag_pattern}
+                for e in gate_config.packages
+                if _is_local_package(e)
+            ],
+            tag_pattern=gate_config.build.tag_pattern,
+        )
+        tagger.preflight(plans, remote="origin" if push_tag else None)
+    except TaggingRefusal as refusal:
+        if not json_output:
+            logger.error(refusal.message)
+            if refusal.hint:
+                logger.info(f"Hint: {refusal.hint}")
+        return (
+            {
+                "status": "refused",
+                "created": [],
+                "refusal_code": refusal.code,
+                "message": refusal.message,
+            },
+            None,
+            True,
+        )
+
+    try:
+        created = tagger.create(plans)
+    except TaggingRefusal as refusal:
+        if not json_output:
+            logger.error(refusal.message)
+        return (
+            {
+                "status": "refused",
+                "created": [],
+                "refusal_code": refusal.code,
+                "message": refusal.message,
+            },
+            None,
+            True,
+        )
+
+    tag_creation_payload = {
+        "status": "ok",
+        "created": list(created),
+        "refusal_code": None,
+    }
+    tag_push_payload: dict | None = None
+    if push_tag:
+        try:
+            pushed = tagger.push(created, remote="origin")
+        except TaggingRefusal as refusal:
+            if not json_output:
+                logger.error(refusal.message)
+            tag_push_payload = {
+                "status": "refused",
+                "pushed": [],
+                "remote": "origin",
+                "refusal_code": refusal.code,
+                "message": refusal.message,
+            }
+            return tag_creation_payload, tag_push_payload, True
+        tag_push_payload = {
+            "status": "ok",
+            "pushed": list(pushed),
+            "remote": "origin",
+            "refusal_code": None,
+        }
+    return tag_creation_payload, tag_push_payload, False
 
 
 def _render_bundle_result(logger, pack_result, fmt, target, dry_run):
