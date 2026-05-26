@@ -32,8 +32,14 @@ $EDITOR apm.yml                               # 2. describe each package
 apm marketplace check                         # 3. validate refs resolve
 apm pack                                      # 4. build marketplace artifacts
 git add apm.yml .claude-plugin/marketplace.json
-git commit -m "Release v1.0.0" && git tag v1.0.0 && git push --tags
+git commit -m "Release v1.0.0"                # 5. commit
+apm pack --check-versions --create-tag --push # 6. tag and push from a clean tree
 ```
+
+Step 6 collapses tag-create-and-push into one command and refuses
+on a dirty tree, a tag collision, or a version mismatch. See
+[Releasing from any CI -> One-shot tagging](../releasing-from-any-ci/#one-shot-tagging-from-a-clean-tree)
+for the full refusal contract and exit codes.
 
 A consumer in another repo then runs:
 

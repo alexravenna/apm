@@ -290,6 +290,71 @@ class TestJsonEnvelope:
         assert data["tag_creation"] is None
         assert data["tag_push"] is None
 
+    def test_pack_json_envelope_sources_error_from_tag_push_when_push_refuses(
+        self, tmp_path, monkeypatch, run_git_cmd
+    ):
+        """Regression-trap: when push refuses (creation succeeded), the
+        envelope.errors[].code must come from tag_push_payload, not from
+        tag_creation_payload (which has refusal_code=None for ok status)."""
+        repo = _scaffold_repo(tmp_path, run_git_cmd)
+        # Point origin to a non-existent path so push fails with git_failure.
+        # ls-remote also fails (fail-open warning) but preflight still passes.
+        run_git_cmd(["remote", "add", "origin", str(tmp_path / "no-such-remote.git")], repo)
+        monkeypatch.chdir(repo)
+        result = _invoke("--check-versions", "--create-tag", "--push", "--json", mix_stderr=False)
+        assert result.exit_code == 1, result.output
+        data = _parse_json(result.output)
+        # Creation succeeded locally...
+        assert data["tag_creation"]["status"] == "ok"
+        assert data["tag_creation"]["refusal_code"] is None
+        # ...push refused...
+        assert data["tag_push"]["status"] == "refused"
+        assert data["tag_push"]["refusal_code"] == "git_failure"
+        # ...and the top-level error MUST carry the push refusal code,
+        # not None (the bug python-architect flagged).
+        codes = {e["code"] for e in data["errors"]}
+        assert "git_failure" in codes, (
+            f"Expected git_failure in {codes}; bug if None or tag_refused appears"
+        )
+        assert None not in codes
+
+    def test_pack_create_tag_refuses_no_marketplace_on_bundle_only_project(
+        self, tmp_path, monkeypatch, run_git_cmd
+    ):
+        """Bundle-only project (no marketplace block) cannot derive tag names."""
+        repo = tmp_path / "bundle-only"
+        repo.mkdir()
+        (repo / "apm.yml").write_text(
+            _tw.dedent(
+                """\
+                name: bundle-only
+                description: bundle.
+                version: 1.0.0
+                dependencies:
+                  apm: []
+                """
+            ),
+            encoding="utf-8",
+        )
+        # Minimal lockfile so the bundle path resolves.
+        (repo / "apm.lock.yaml").write_text(
+            "apm_lockfile_version: 1\nentries: []\n", encoding="utf-8"
+        )
+        assert run_git_cmd(["init", "-q", "-b", "main"], repo).returncode == 0
+        run_git_cmd(["config", "user.name", "Test"], repo)
+        run_git_cmd(["config", "user.email", "test@example.com"], repo)
+        run_git_cmd(["config", "commit.gpgSign", "false"], repo)
+        run_git_cmd(["config", "tag.gpgSign", "false"], repo)
+        run_git_cmd(["add", "-A"], repo)
+        assert run_git_cmd(["commit", "-q", "-m", "init"], repo).returncode == 0
+        monkeypatch.chdir(repo)
+        result = _invoke(
+            "--check-versions", "--create-tag", "--dry-run", "--json", mix_stderr=False
+        )
+        assert result.exit_code == 1
+        data = _parse_json(result.output)
+        assert data["tag_creation"]["refusal_code"] == "no_marketplace"
+
 
 class TestHelp:
     def test_help_mentions_create_tag_and_push(self):

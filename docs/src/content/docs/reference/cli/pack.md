@@ -41,6 +41,8 @@ Bundles are target-agnostic. The consumer's project decides where files land at 
 | `--marketplace-output PATH` | _(hidden)_ | **Deprecated.** Translates to `--marketplace-path claude=PATH` with a stderr warning. Will be removed in v0.15 (see #1318). |
 | `--legacy-skill-paths` | off | Bundle skills under per-client paths (e.g. `.cursor/skills/`) instead of the converged `.agents/skills/`. Compatibility flag. |
 | `--target`, `-t VALUE` | auto-detect | **Deprecated.** Recorded as informational `pack.target` metadata only; ignored by `apm install`. Will be removed in a future release. |
+| `--create-tag` | off | Create annotated git tag(s) from `marketplace.versioning` after `--check-versions` succeeds on a clean tree. Requires `--check-versions`. Tag names: `lockstep` -> `v<version>`; `tag_pattern` -> templated; `per_package` -> `<name>-v<version>`. |
+| `--push` | off | Push the just-created tag(s) to `origin` by explicit refspec (never `git push --tags`). Requires `--create-tag`. |
 
 ## Examples
 
@@ -143,8 +145,10 @@ Configure marketplace artifact paths in `apm.yml`: `marketplace.claude.output` c
 | Code | Meaning |
 |---|---|
 | `0` | Success. Requested artifacts written (or, with `--dry-run`, planned). |
-| `1` | Build or runtime error: network failure, ref not found, no tag matches a marketplace range, lockfile read error, or unhandled packer exception. |
+| `1` | Build or runtime error: network failure, ref not found, no tag matches a marketplace range, lockfile read error, unhandled packer exception, **or** `--create-tag` / `--push` refusal (`tag_creation.refusal_code` / `tag_push.refusal_code` carries the stable code: `dirty_tree`, `tag_exists`, `version_mismatch`, `no_remote`, `push_without_tag`, `no_check_versions`, `no_marketplace`, `git_failure`). |
 | `2` | `apm.yml` schema validation error. |
+| `3` | `--check-versions` gate failure: bumped local package version is not strictly greater than the latest matching git tag. |
+| `4` | `--check-clean` gate failure: working tree or staging area has uncommitted changes. |
 
 ## Related
 

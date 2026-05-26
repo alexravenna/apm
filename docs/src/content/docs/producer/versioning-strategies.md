@@ -118,5 +118,13 @@ Use per_package when:
 apm pack --check-versions --dry-run
 ```
 
+To collapse the gate-check, tag-create, and push into a single
+command:
+
+```bash
+apm pack --check-versions --create-tag --push
+```
+
 See [Releasing from any CI](../releasing-from-any-ci/) for the full
-release pipeline that runs both gates.
+release pipeline and the
+[one-shot tagging flow](../releasing-from-any-ci/#one-shot-tagging-from-a-clean-tree).

@@ -67,20 +67,24 @@ The block runs only after `--check-versions` succeeds, so a version
 mismatch still exits `3` and never produces a tag. `--push` requires
 `--create-tag`. The tag name is derived from `marketplace.versioning`:
 
-- `single_version` -> one tag, `v<version>` (or your `tag_pattern`).
-- `per_package`    -> one tag per package, e.g. `<name>-v<version>`.
+- `lockstep` (default) -> one tag, `v<version>`.
+- `tag_pattern` -> one tag named by your `tag_pattern` template (e.g. `release-v<version>`).
+- `per_package`  -> one tag per local package, e.g. `<name>-v<version>`.
 
 `--dry-run` previews exactly which tags would be created and pushed
-without touching git. Refusals are stable JSON contract codes
+without touching git. Push uses explicit refspecs
+(`refs/tags/<name>:refs/tags/<name>`), never `git push --tags`, so
+only the planned tags move. Refusals are stable JSON contract codes
 (`dirty_tree`, `tag_exists`, `version_mismatch`, `no_remote`,
 `push_without_tag`, `no_check_versions`, `no_marketplace`,
 `git_failure`) emitted under `tag_creation.refusal_code` and exit
 with code `1`. The existing version-gate (exit `3`) and drift-gate
 (exit `4`) codes are unchanged.
 
-This is intended for local one-shot releases; CI pipelines should
-continue to drive tagging through `gh release create` or the
-equivalent forge primitive shown above.
+Use this flow from a maintainer workstation or from CI -- the
+refusal codes give pipelines a deterministic surface to react to.
+The forge-native flows shown below remain valid if you prefer to
+keep tag creation in `gh release create` or an equivalent.
 
 
 ## GitHub Actions

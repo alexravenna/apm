@@ -505,11 +505,20 @@ def pack_cmd(
             envelope["ok"] = False
         if tag_refusal and tag_creation_payload is not None:
             envelope["ok"] = False
+            # Source the error from whichever payload actually carries the
+            # refusal: push-phase refusal lives on tag_push_payload while
+            # creation succeeded; otherwise the refusal originated in the
+            # preflight/create path on tag_creation_payload.
+            refusal_source = (
+                tag_push_payload
+                if tag_push_payload and tag_push_payload.get("refusal_code")
+                else tag_creation_payload
+            )
             envelope["errors"] = [
                 *envelope["errors"],
                 {
-                    "code": tag_creation_payload.get("refusal_code", "tag_refused"),
-                    "message": tag_creation_payload.get("message", "tag refusal"),
+                    "code": refusal_source.get("refusal_code", "tag_refused"),
+                    "message": refusal_source.get("message", "tag refusal"),
                 },
             ]
         click.echo(json_mod.dumps(envelope, indent=2))
@@ -646,6 +655,8 @@ def _run_tagging(
     except TaggingRefusal as refusal:
         if not json_output:
             logger.error(refusal.message)
+            if refusal.hint:
+                logger.info(f"Hint: {refusal.hint}")
         return (
             {
                 "status": "refused",
@@ -669,6 +680,8 @@ def _run_tagging(
         except TaggingRefusal as refusal:
             if not json_output:
                 logger.error(refusal.message)
+                if refusal.hint:
+                    logger.info(f"Hint: {refusal.hint}")
             tag_push_payload = {
                 "status": "refused",
                 "pushed": [],

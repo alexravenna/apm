@@ -263,7 +263,10 @@ class GitTagger:
                 names.append(plan.name)
                 continue
             self._run_or_raise(
-                ["tag", "-a", "-m", plan.annotation, plan.name],
+                # ``--`` terminates option parsing so a tag name beginning
+                # with ``-`` (e.g. an unusual ``tag_pattern``) cannot be
+                # interpreted as a git-tag flag.
+                ["tag", "-a", "-m", plan.annotation, "--", plan.name],
                 op=f"git tag -a {plan.name}",
             )
             self._log("success", f"Created tag: {plan.name} (HEAD = {sha_short})")
@@ -278,6 +281,17 @@ class GitTagger:
         """
         if not tag_names:
             return []
+        # Defensive guard: a remote name starting with ``-`` would be parsed
+        # as a git option. Refspecs are safe because they always start with
+        # ``refs/tags/``; the remote is the only positional that could be
+        # attacker-influenced from a future caller (today pack.py hardcodes
+        # 'origin').
+        if remote.startswith("-"):
+            raise TaggingRefusal(
+                code=REFUSAL_GIT_FAILURE,
+                message=f"Refusing to push: remote name {remote!r} starts with '-'.",
+                hint="Rename the remote to a value not starting with '-'.",
+            )
         if self.dry_run:
             for name in tag_names:
                 self._log("dry_run_notice", f"Would push tag: {name} -> {remote}")
@@ -357,8 +371,10 @@ class GitTagger:
             # Network / auth failure -- skip remote check rather than
             # falsely refuse. The actual push will surface the real error.
             self._log(
-                "info",
-                f"Could not list remote tags from {remote}; skipping remote tag existence check.",
+                "warning",
+                f"Could not list remote tags from {remote}; skipping remote "
+                "tag existence check (fail-open). Tag-name collisions on "
+                "the remote will surface at push time.",
             )
             return set()
         present: set[str] = set()

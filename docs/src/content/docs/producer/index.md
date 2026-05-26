@@ -42,7 +42,7 @@ Once the 5-rung ladder works end to end, three pages cover the operational conce
 |------------------------------------------|----------------------------------------------------------------------|
 | Picking a repo layout before you author  | [Repo shapes](./repo-shapes/) -- two starting layouts plus a hybrid composition for teams that ship their own plugin alongside a curated marketplace of others |
 | Aligning versions across local packages  | [Versioning strategies](./versioning-strategies/)                    |
-| Wiring the release into any CI provider  | [Releasing from any CI](./releasing-from-any-ci/)                    |
+| Wiring the release into any CI provider  | [Releasing from any CI](./releasing-from-any-ci/) -- includes a [one-shot tagging flow](./releasing-from-any-ci/#one-shot-tagging-from-a-clean-tree) (`apm pack --create-tag --push`) for maintainers who want the CLI to materialise and push the release tag for them. |
 
 ## The producer mental model
 
