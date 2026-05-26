@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `marketplace.packages[].source` in `apm.yml` now accepts non-default git hosts via the `host.tld/owner/repo` shorthand or the full `https://host.tld/owner/repo[.git]` URL; per-host auth flows through the standard APM token chain. Unlocks GitHub Enterprise and self-hosted GitLab as first-class marketplace package sources. (#1288)
 - `apm marketplace add` now accepts local filesystem paths, `file://` URIs, SSH URLs, and HTTPS URLs to any git host (Azure DevOps via `ADO_APM_PAT`, GitLab, Gitea, Bitbucket Server, self-hosted). Generic-git registrations fetch `marketplace.json` via `GitCache` and never forward APM tokens; local marketplaces read the manifest directly. `apm install <plugin>@<local-marketplace>` is fully supported, including marketplaces whose `marketplace.json` uses relative plugin sources.
 
 ### Security
