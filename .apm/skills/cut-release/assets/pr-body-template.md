@@ -15,9 +15,9 @@ Lint mirror green locally (ruff check + format, pylint R0801, auth-signals). See
 
 ## Post-merge
 
-Tag `{version}` to trigger the release workflow:
+Tag `{tag}` to trigger the release workflow:
 
 ```
-git tag {version}
-git push origin {version}
+git tag {tag}
+git push origin {tag}
 ```

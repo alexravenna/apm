@@ -202,8 +202,12 @@ will claim CI is green; that claim must hold.
    Include the standard `Co-authored-by` trailer.
 3. `git push -u origin HEAD`.
 4. Compose the PR body from `assets/pr-body-template.md`,
-   substituting `{version}`, `{date}`, `{bump_rationale}`, and
-   (if BREAKING) `{breaking_summary}`.
+   substituting `{version}` (unprefixed, e.g. `0.16.1` -- used by
+   `CHANGELOG.md` and `pyproject.toml`), `{tag}` (v-prefixed, e.g.
+   `v0.16.1` -- used by the post-merge `git tag` block, since the
+   release workflow's stable-release regex requires the `v` prefix
+   per `.github/workflows/build-release.yml`), `{date}`,
+   `{bump_rationale}`, and (if BREAKING) `{breaking_summary}`.
 5. `gh pr create --base main --head <branch> --title
    "chore: release vX.Y.Z" --body-file <tmpfile>`.
 6. Echo the PR URL.
