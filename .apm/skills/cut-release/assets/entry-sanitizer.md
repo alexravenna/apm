@@ -98,7 +98,7 @@ The rewritten block goes in place of `[Unreleased]`:
 ```
 ## [Unreleased]
 
-## [vX.Y.Z] - YYYY-MM-DD
+## [X.Y.Z] - YYYY-MM-DD
 
 ### Added
 
