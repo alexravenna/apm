@@ -145,7 +145,7 @@ Rewrite the CHANGELOG.md `[Unreleased]` block in place:
 ```
 ## [Unreleased]
 
-## [vX.Y.Z] - YYYY-MM-DD
+## [X.Y.Z] - YYYY-MM-DD
 
 ### Added
 ...
