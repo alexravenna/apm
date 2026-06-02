@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `apm install -g` now deploys `bin/` executables from `marketplace_plugin` packages into `~/.claude/skills/<name>/bin/` and makes them executable, giving Claude Code direct access to plugin-provided binaries. The `bin_deploy` policy field lets enterprise administrators opt out globally (`deny_all: true`) or per-package. (#1544)
 - Teams with existing `AGENTS.md` content can now adopt `apm compile` without
   losing hand-written rules: set `compilation.agents_md.mode: managed_section`
   in `apm.yml` to update only the APM-owned block between configurable markers.
