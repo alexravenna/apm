@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `apm install` now keeps format-transformed rule files (`.claude/rules`,
+  `.cursor/rules`, `.windsurf/rules`) tracked in `managed_files` and rewrites
+  them when the source instruction changes, instead of mis-classifying them as
+  user-authored collisions and skipping them; also fixes a mislabeled
+  `windsurf_rules` entry in install output. (by @srid, closes #1662)
 ### Changed
 
 - Auth credential cascade now emits debug-level logs for every fallback step,
