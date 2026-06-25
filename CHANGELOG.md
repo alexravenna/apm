@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The shared gh-aw workflow `.github/workflows/shared/apm.md` exposes an optional `apm-version` import input that pins the apm CLI version for both the pack and restore `microsoft/apm-action` steps (so the two cannot skew), surviving `gh aw update` without hand-editing the vendored file. Omitting it falls through to the action's pinned default via a gh-aw schema default, so non-opting consumers stay reproducible instead of floating to `latest`. (#1842)
 - Org-wide policy discovery now cascades through candidate repo names
   (`.github`, then `.apm`, then `_apm`) and speaks the Azure DevOps Items
   API, so Azure DevOps organizations -- which forbid repo names that begin
