@@ -50,6 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Azure DevOps marketplace metadata now resolves through the Azure DevOps
+  Items API instead of cloning the whole repo, with transparent fallback to
+  the existing git path when REST is unavailable. (by @Aaryan-Dadu; closes
+  #1808) (#1852)
 - Executable-trust vocabulary is unified onto one noun, `executables`.
   `apm approve` / `apm deny` now default to the project `apm.yml`
   `executables: {allow, deny}` block (the committed, team-wide admin
