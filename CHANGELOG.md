@@ -105,6 +105,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reinstalling on Windows no longer falsely re-reports unchanged files as
+  freshly installed. A dependency whose source carries CRLF line endings
+  (text-mode checkout or `core.autocrlf`) now adopts the already-deployed LF
+  file, so no-op installs report `(files unchanged)` as they do on
+  Linux/macOS. (#1916)
 - `apm update` no longer shows a spurious update for registry semver deps already at the latest matching version. (#1897)
 - APM-written deployed text files now use LF line endings on every platform,
   so identical content no longer produces different
