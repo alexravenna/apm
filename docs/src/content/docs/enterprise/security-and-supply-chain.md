@@ -15,7 +15,7 @@ what APM does not defend against.
 APM defends the **build-time supply chain** for AI agent context:
 prompts, instructions, skills, hooks, and MCP server declarations
 flowing from a git source through `apm install` into your project tree
-and on into seven harnesses. The defended properties are reproducibility
+and on into eight harnesses. The defended properties are reproducibility
 (same install everywhere), integrity (downloaded content matches the
 lockfile), provenance (every dep traces to a pinned commit at a named
 host), and pre-deploy content safety (no hidden Unicode reaches the
@@ -113,8 +113,8 @@ prints an actionable warning; on the **consuming** path (install/export of
 other people's deps) APM stays silent -- it never nags about transitive
 licenses it cannot fix. Source: `src/apm_cli/export/authoring.py`.
 
-See [`apm lock export`](../../reference/cli/lock/#export-sbom-inventory) and
-the [`license` manifest field](../../reference/manifest-schema/#35-license)
+See [`apm lock export`](../reference/cli/lock/#export-sbom-inventory) and
+the [`license` manifest field](../reference/manifest-schema/#35-license)
 for the per-command reference.
 
 ## Secret handling
