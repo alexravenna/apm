@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Installing the same GitHub or package-registry dependency with different
+  owner/repository casing no longer creates duplicate identities, lock/cache
+  keys, or install paths. Publish uses the same lowercase identity, while
+  unknown git hosts retain case-sensitive paths. (closes #2073) (#2098)
 - `apm deps tree` no longer repeats same-repository virtual packages, keeping
   large monorepo dependency trees accurate and scannable. (#2093)
 - `apm install host/org/repo/subpath#ref` on an unrecognised self-hosted FQDN
