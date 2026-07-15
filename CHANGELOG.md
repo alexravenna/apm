@@ -38,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve every enforceable policy field and strict denial across warm-cache reads (#2193).
   Cached inheritance chains no longer relabel stale strict parents as fresh or
   bypass inherited policy in `apm policy status` and executable approval.
+- `apm install` now keeps complete nested GitLab project paths in its shared
+  and persistent clone-cache identities, preventing sibling projects under a
+  common group prefix from reusing the wrong repository. (closes #2191; #2192)
+  OpenAPM `openapm-v0.1.md` now normatively binds complete repository identity
+  through resolution, cache reuse, and materialization.
 - `apm pack` now emits the `category` field in the Claude marketplace output
   (`.claude-plugin/marketplace.json`) when a package sets it, matching the
   Anthropic marketplace schema and the existing Codex output. It stays optional

@@ -482,6 +482,57 @@ if ! printf '%s\n' "$packed_source_body" \
     violations=$((violations + 1))
 fi
 
+echo "[*] AC11: Git repository cache identity authority"
+cache_identity_output=$(python3 scripts/check_repository_cache_identity_owner.py \
+    --root "$ROOT" 2>&1)
+cache_identity_status=$?
+if [ "$cache_identity_status" -ne 0 ]; then
+    echo "[x] Git repository cache identity must route through canonical owners"
+    echo "$cache_identity_output"
+    violations=$((violations + 1))
+fi
+if ! grep -q 'repository = normalize_repo_url(repository_url)' \
+    src/apm_cli/deps/shared_clone_cache.py; then
+    echo "[x] SharedCloneCache must normalize the complete repository URL"
+    violations=$((violations + 1))
+fi
+if ! grep -q 'repository_url = dep_ref.to_github_url()' \
+    src/apm_cli/deps/github_downloader.py; then
+    echo "[x] Downloader cache consumers must pass the complete canonical Git URL"
+    violations=$((violations + 1))
+fi
+if ! grep -q 'cache_shard_key(dep_ref.to_github_url())' \
+    src/apm_cli/deps/tiered_ref_resolver.py; then
+    echo "[x] Tiered ref resolution must reuse the persistent Git cache identity"
+    violations=$((violations + 1))
+fi
+if [ "$(grep -c '_repository_cache_identity(dep_ref)' \
+    src/apm_cli/deps/tiered_ref_resolver.py)" -lt 2 ]; then
+    echo "[x] Per-run ref resolution must reuse the full repository cache identity"
+    violations=$((violations + 1))
+fi
+if ! grep -q 'return normalize_repo_url(dep_ref.to_github_url())' \
+    src/apm_cli/deps/tiered_ref_resolver.py; then
+    echo "[x] Per-run ref cache identity must retain host and complete path"
+    violations=$((violations + 1))
+fi
+check_pattern \
+    "Repository cache identity must not truncate repository paths" \
+    'cache_(host|owner|repo)|_canonical_url[[:space:]]*=[[:space:]]*f?"https://' \
+    src/apm_cli/deps/github_downloader.py
+check_pattern \
+    "Tiered ref resolution must not derive cache shards from repo_url" \
+    'cache_shard_key\(dep_ref\.repo_url\)' \
+    src/apm_cli/deps
+check_pattern \
+    "Per-run ref resolution must not key caches by bare repo_url" \
+    'cache\.(get|put)\(dep_ref\.repo_url|key[[:space:]]*=[[:space:]]*\(dep_ref\.repo_url' \
+    src/apm_cli/deps/tiered_ref_resolver.py
+check_pattern \
+    "Repository cache keys must stay owned by cache/url_normalize.py" \
+    'to_repository_cache_url' \
+    src/apm_cli
+
 if [ "$violations" -gt 0 ]; then
     echo "[x] $violations architecture boundary rule(s) failed"
     exit 1

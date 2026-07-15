@@ -695,3 +695,38 @@ def test_link_resolver_owns_dependency_deployment_frame_mapping() -> None:
 
     assert "candidate_in_deployment = ctx.deployment_package_root / package_relative" in source
     assert "Dependency deployment-frame mapping belongs to UnifiedLinkResolver" in guard
+
+
+def test_ac11_cache_url_normalizer_owns_repository_cache_identity() -> None:
+    """AC11 keeps every cache tier behind the complete URL identity owner."""
+    from scripts.check_repository_cache_identity_owner import check
+
+    root = Path(__file__).parents[2]
+    downloader = (root / "src/apm_cli/deps/github_downloader.py").read_text()
+    shared_cache = (root / "src/apm_cli/deps/shared_clone_cache.py").read_text()
+    tiered_resolver = (root / "src/apm_cli/deps/tiered_ref_resolver.py").read_text()
+    normalizer = (root / "src/apm_cli/cache/url_normalize.py").read_text()
+    guard = (root / "scripts/lint-architecture-boundaries.sh").read_text()
+
+    assert "def normalize_repo_url(" in normalizer
+    assert "def cache_shard_key(" in normalizer
+    assert check(root) == []
+    assert "AC10: marketplace source parsing authority" in guard
+    assert "Packed marketplace sources must use DependencyReference.parse_from_dict" in guard
+    assert "AC11: Git repository cache identity authority" in guard
+    assert "check_repository_cache_identity_owner.py" in guard
+    assert "repository = normalize_repo_url(repository_url)" in shared_cache
+    assert "repository_url = dep_ref.to_github_url()" in downloader
+    assert (
+        "_persistent_cache.get_checkout(\n                    dep_ref.to_github_url(),"
+        in downloader
+    )
+    assert "cache_shard_key(dep_ref.to_github_url())" in tiered_resolver
+    assert "cache_shard_key(dep_ref.repo_url)" not in tiered_resolver
+    assert tiered_resolver.count("_repository_cache_identity(dep_ref)") >= 2
+    assert "return normalize_repo_url(dep_ref.to_github_url())" in tiered_resolver
+    assert "key = (dep_ref.repo_url, ref)" not in tiered_resolver
+    assert "Repository cache identity must not truncate repository paths" in guard
+    assert "to_repository_cache_url" not in downloader
+    for retired_derivation in ("cache_owner", "cache_repo", '_canonical_url = f"https://'):
+        assert retired_derivation not in downloader
